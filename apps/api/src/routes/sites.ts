@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import { eq, desc } from "drizzle-orm";
+import cronParser from "cron-parser";
 import { db } from "../db/client.js";
 import { sites, crawls } from "../db/schema.js";
 import { crawlQueue } from "../queue/client.js";
@@ -24,6 +25,20 @@ const createSiteSchema = z.object({
 });
 
 const updateSiteSchema = createSiteSchema.partial();
+
+function getNextScheduledAt(scheduleEnabled: boolean, scheduleCron?: string | null): Date | null {
+  if (!scheduleEnabled || !scheduleCron) {
+    return null;
+  }
+
+  try {
+    const interval = cronParser.parse(scheduleCron);
+    return interval.next().toDate();
+  } catch (error) {
+    console.error(`Invalid cron expression: ${scheduleCron}`);
+    return null;
+  }
+}
 
 // List all sites
 app.get("/", async (c) => {
@@ -70,6 +85,10 @@ app.get("/:id", async (c) => {
 app.post("/", zValidator("json", createSiteSchema), async (c) => {
   const data = c.req.valid("json");
 
+  const scheduleEnabled = data.scheduleEnabled ?? false;
+  const scheduleCron = data.scheduleCron ?? null;
+  const nextScheduledAt = getNextScheduledAt(scheduleEnabled, scheduleCron);
+
   const [site] = await db
     .insert(sites)
     .values({
@@ -80,8 +99,9 @@ app.post("/", zValidator("json", createSiteSchema), async (c) => {
       excludePatterns: data.excludePatterns,
       removeWebflowBadge: data.removeWebflowBadge ?? true,
       redirectsCsv: data.redirectsCsv,
-      scheduleEnabled: data.scheduleEnabled ?? false,
-      scheduleCron: data.scheduleCron,
+      scheduleEnabled,
+      scheduleCron,
+      nextScheduledAt,
       storageType: data.storageType ?? "local",
       storagePath: data.storagePath,
     })
@@ -95,18 +115,29 @@ app.patch("/:id", zValidator("json", updateSiteSchema), async (c) => {
   const id = c.req.param("id");
   const data = c.req.valid("json");
 
+  const existing = await db.query.sites.findFirst({
+    where: eq(sites.id, id),
+  });
+
+  if (!existing) {
+    return c.json({ error: "Site not found" }, 404);
+  }
+
+  const scheduleEnabled = data.scheduleEnabled ?? existing.scheduleEnabled ?? false;
+  const scheduleCron = data.scheduleCron ?? existing.scheduleCron;
+  const nextScheduledAt = getNextScheduledAt(scheduleEnabled, scheduleCron);
+
   const [site] = await db
     .update(sites)
     .set({
       ...data,
+      scheduleEnabled,
+      scheduleCron,
+      nextScheduledAt,
       updatedAt: new Date(),
     })
     .where(eq(sites.id, id))
     .returning();
-
-  if (!site) {
-    return c.json({ error: "Site not found" }, 404);
-  }
 
   return c.json({ site });
 });

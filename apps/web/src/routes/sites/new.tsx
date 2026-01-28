@@ -5,6 +5,35 @@ import { useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 
+type ScheduleFrequency = "daily" | "weekly";
+
+const WEEKDAYS = [
+  { label: "Sun", value: "0" },
+  { label: "Mon", value: "1" },
+  { label: "Tue", value: "2" },
+  { label: "Wed", value: "3" },
+  { label: "Thu", value: "4" },
+  { label: "Fri", value: "5" },
+  { label: "Sat", value: "6" },
+];
+
+function toCronExpression(frequency: ScheduleFrequency, time: string, days: string[]): string | null {
+  const [hourString, minuteString] = time.split(":");
+  const hour = Number.parseInt(hourString, 10);
+  const minute = Number.parseInt(minuteString, 10);
+
+  if (Number.isNaN(hour) || Number.isNaN(minute)) {
+    return null;
+  }
+
+  if (frequency === "daily") {
+    return `${minute} ${hour} * * *`;
+  }
+
+  const dayList = days.length > 0 ? days.join(",") : "1";
+  return `${minute} ${hour} * * ${dayList}`;
+}
+
 export const Route = createFileRoute("/sites/new")({
   component: NewSitePage,
 });
@@ -20,9 +49,12 @@ function NewSitePage() {
     maxPages: null,
     removeWebflowBadge: true,
     scheduleEnabled: false,
-    scheduleCron: null,
     storageType: "local",
   });
+
+  const [scheduleFrequency, setScheduleFrequency] = useState<ScheduleFrequency>("daily");
+  const [scheduleTime, setScheduleTime] = useState("05:00");
+  const [scheduleDays, setScheduleDays] = useState<string[]>(["1"]);
 
   const createMutation = useMutation({
     mutationFn: sitesApi.create,
@@ -34,8 +66,19 @@ function NewSitePage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    createMutation.mutate(formData);
+    const scheduleCron = formData.scheduleEnabled
+      ? toCronExpression(scheduleFrequency, scheduleTime, scheduleDays)
+      : null;
+
+    createMutation.mutate({
+      ...formData,
+      scheduleCron,
+    });
   };
+
+  const cronPreview = formData.scheduleEnabled
+    ? toCronExpression(scheduleFrequency, scheduleTime, scheduleDays)
+    : null;
 
   return (
     <div className="p-8 max-w-2xl">
@@ -156,20 +199,84 @@ function NewSitePage() {
           </div>
 
           {formData.scheduleEnabled && (
-            <div>
-              <label className="block text-sm font-medium mb-1">Cron Expression</label>
-              <input
-                type="text"
-                value={formData.scheduleCron || ""}
-                onChange={(e) =>
-                  setFormData({ ...formData, scheduleCron: e.target.value || null })
-                }
-                className="w-full px-3 py-2 border border-input rounded-md bg-background"
-                placeholder="0 5 * * 1,3,5"
-              />
-              <p className="text-xs text-muted-foreground mt-1">
-                Example: "0 5 * * 1,3,5" runs at 5am on Mon, Wed, Fri
-              </p>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">Frequency</label>
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setScheduleFrequency("daily")}
+                    className={`px-3 py-2 rounded-md text-sm border ${
+                      scheduleFrequency === "daily"
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-background border-input"
+                    }`}
+                  >
+                    Daily
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setScheduleFrequency("weekly")}
+                    className={`px-3 py-2 rounded-md text-sm border ${
+                      scheduleFrequency === "weekly"
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-background border-input"
+                    }`}
+                  >
+                    Weekly
+                  </button>
+                </div>
+              </div>
+
+              {scheduleFrequency === "weekly" && (
+                <div>
+                  <label className="block text-sm font-medium mb-1">Days</label>
+                  <div className="flex flex-wrap gap-2">
+                    {WEEKDAYS.map((day) => {
+                      const isSelected = scheduleDays.includes(day.value);
+                      return (
+                        <button
+                          key={day.value}
+                          type="button"
+                          onClick={() => {
+                            const next = isSelected
+                              ? scheduleDays.filter((d) => d !== day.value)
+                              : [...scheduleDays, day.value];
+                            setScheduleDays(next.length > 0 ? next : ["1"]);
+                          }}
+                          className={`px-2 py-1 rounded-md text-xs border ${
+                            isSelected
+                              ? "bg-primary text-primary-foreground border-primary"
+                              : "bg-background border-input"
+                          }`}
+                        >
+                          {day.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-sm font-medium mb-1">Time</label>
+                <input
+                  type="time"
+                  value={scheduleTime}
+                  onChange={(e) => setScheduleTime(e.target.value)}
+                  className="w-full px-3 py-2 border border-input rounded-md bg-background"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Times are interpreted in the server timezone (UTC on Railway)
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">Generated Cron</label>
+                <div className="px-3 py-2 border border-input rounded-md bg-muted/30 font-mono text-sm">
+                  {cronPreview || "Invalid time"}
+                </div>
+              </div>
             </div>
           )}
         </div>

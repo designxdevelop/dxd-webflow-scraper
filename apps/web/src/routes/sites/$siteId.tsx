@@ -130,6 +130,12 @@ function SiteDetailPage() {
             {site.scheduleEnabled ? (
               <dl className="space-y-3">
                 <div>
+                  <dt className="text-sm text-muted-foreground">Summary</dt>
+                  <dd className="font-medium">
+                    {formatScheduleSummary(site.scheduleCron) || "Custom schedule"}
+                  </dd>
+                </div>
+                <div>
                   <dt className="text-sm text-muted-foreground">Cron</dt>
                   <dd className="font-medium font-mono text-sm">{site.scheduleCron}</dd>
                 </div>
@@ -223,4 +229,48 @@ function StatusBadge({ status }: { status: string }) {
       {status}
     </span>
   );
+}
+
+function formatScheduleSummary(cron: string | null): string | null {
+  if (!cron) return null;
+  const parts = cron.split(" ");
+  if (parts.length < 5) return null;
+
+  const [minute, hour, , , dayOfWeek] = parts;
+  const time = formatTime(hour, minute);
+
+  if (dayOfWeek === "*") {
+    return `Every day at ${time}`;
+  }
+
+  const dayNames = {
+    "0": "Sun",
+    "1": "Mon",
+    "2": "Tue",
+    "3": "Wed",
+    "4": "Thu",
+    "5": "Fri",
+    "6": "Sat",
+    "7": "Sun",
+  } as const;
+
+  const days = dayOfWeek
+    .split(",")
+    .map((d) => dayNames[d as keyof typeof dayNames])
+    .filter(Boolean)
+    .join(", ");
+
+  if (!days) return null;
+  return `Every ${days} at ${time}`;
+}
+
+function formatTime(hour: string, minute: string): string {
+  const h = Number.parseInt(hour, 10);
+  const m = Number.parseInt(minute, 10);
+  if (Number.isNaN(h) || Number.isNaN(m)) return `${hour}:${minute}`;
+
+  const suffix = h >= 12 ? "PM" : "AM";
+  const hour12 = h % 12 === 0 ? 12 : h % 12;
+  const minutePadded = String(m).padStart(2, "0");
+  return `${hour12}:${minutePadded} ${suffix}`;
 }

@@ -1,0 +1,25 @@
+{
+  "name": "dxd-webflow-scraper",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "services/*"
+  ],
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "db:generate": "turbo db:generate --filter=@dxd/api",
+    "db:migrate": "turbo db:migrate --filter=@dxd/api",
+    "db:push": "turbo db:push --filter=@dxd/api"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.0",
+    "typescript": "^5.9.3"
+  },
+  "packageManager": "bun@1.2.0",
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

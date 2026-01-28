@@ -33,10 +33,33 @@ export function useSession() {
   });
 }
 
-// Sign in - redirects to GitHub OAuth
-export function signIn() {
-  const callbackUrl = encodeURIComponent(window.location.origin);
-  window.location.href = `${API_BASE}/api/auth/signin/github?callbackUrl=${callbackUrl}`;
+// Sign in - redirects to GitHub OAuth via form POST
+export async function signIn() {
+  // Get CSRF token first
+  const csrfRes = await fetch(`${API_BASE}/api/auth/csrf`, {
+    credentials: "include",
+  });
+  const { csrfToken } = await csrfRes.json();
+
+  // Create a form and submit it to initiate OAuth
+  const form = document.createElement("form");
+  form.method = "POST";
+  form.action = `${API_BASE}/api/auth/signin/github`;
+  
+  const csrfInput = document.createElement("input");
+  csrfInput.type = "hidden";
+  csrfInput.name = "csrfToken";
+  csrfInput.value = csrfToken;
+  form.appendChild(csrfInput);
+
+  const callbackInput = document.createElement("input");
+  callbackInput.type = "hidden";
+  callbackInput.name = "callbackUrl";
+  callbackInput.value = window.location.origin;
+  form.appendChild(callbackInput);
+
+  document.body.appendChild(form);
+  form.submit();
 }
 
 // Sign out

@@ -29,17 +29,11 @@ function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-zinc-950">
       <div className="max-w-md w-full space-y-8 p-8">
         <div className="text-center">
-          <h1 className="text-3xl font-bold text-white">DXD Webflow Archiver</h1>
-          <p className="mt-2 text-zinc-400">
-            Sign in to manage your Webflow site archives
-          </p>
+          <h1 className="text-3xl font-bold text-white">DXD Client Site Archiver</h1>
         </div>
 
         <div className="mt-8 space-y-4">
-          <button
-            onClick={() => signIn()}
-            className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg transition-colors border border-zinc-700"
-          >
+          <button onClick={() => signIn()} className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg transition-colors border border-zinc-700">
             <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
               <path
                 fillRule="evenodd"
@@ -50,9 +44,7 @@ function LoginPage() {
             Sign in with GitHub
           </button>
 
-          <p className="text-center text-sm text-zinc-500">
-            Only @designxdevelop.com email addresses are allowed
-          </p>
+          <p className="text-center text-sm text-zinc-500">Only @designxdevelop.com email addresses are allowed</p>
         </div>
       </div>
     </div>

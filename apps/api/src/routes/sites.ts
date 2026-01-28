@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and, inArray } from "drizzle-orm";
 import cronParser from "cron-parser";
 import { db } from "../db/client.js";
 import { sites, crawls } from "../db/schema.js";
@@ -181,6 +181,17 @@ app.post("/:id/crawl", async (c) => {
 
   if (!site) {
     return c.json({ error: "Site not found" }, 404);
+  }
+
+  const existing = await db.query.crawls.findFirst({
+    where: and(
+      eq(crawls.siteId, siteId),
+      inArray(crawls.status, ["pending", "running", "uploading"])
+    ),
+  });
+
+  if (existing) {
+    return c.json({ error: `Crawl already ${existing.status}` }, 409);
   }
 
   // Create crawl record

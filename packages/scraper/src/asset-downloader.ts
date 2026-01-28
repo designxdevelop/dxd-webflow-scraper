@@ -172,8 +172,13 @@ export class AssetDownloader {
       const parsed = new URL(url);
       const hostname = parsed.hostname.toLowerCase();
 
-      // Allow CDN domains
-      if (hostname.includes("cdn.prod.website-files.com")) {
+      // Allow Webflow CDN domains
+      if (
+        hostname.includes("cdn.prod.website-files.com") ||
+        hostname.endsWith("website-files.com") ||
+        hostname === "uploads-ssl.webflow.com" ||
+        hostname === "d3e54v103j8qbb.cloudfront.net"
+      ) {
         return true;
       }
 

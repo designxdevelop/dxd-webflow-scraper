@@ -19,8 +19,10 @@ function CrawlDetailPage() {
     queryFn: () => crawlsApi.get(crawlId),
     refetchInterval: (data) => {
       // Stop polling once crawl is complete
-      const status = data?.state?.data?.crawl?.status;
-      return status === "running" || status === "pending" ? 2000 : false;
+      const status = data?.crawl?.status;
+      return status === "running" || status === "pending" || status === "uploading"
+        ? 2000
+        : false;
     },
   });
 
@@ -31,9 +33,9 @@ function CrawlDetailPage() {
     },
   });
 
-  // Connect to SSE for live logs if crawl is running
-  const isRunning = data?.crawl?.status === "running";
-  const { logs: liveLogs, progress, connected } = useCrawlLogs(isRunning ? crawlId : null);
+  // Connect to SSE for live logs if crawl is active
+  const isActive = data?.crawl?.status === "running" || data?.crawl?.status === "uploading";
+  const { logs: liveLogs, progress, connected } = useCrawlLogs(isActive ? crawlId : null);
 
   // Auto-scroll to bottom of logs
   useEffect(() => {
@@ -65,7 +67,7 @@ function CrawlDetailPage() {
     failed: crawl.failedPages || 0,
   };
 
-  const allLogs = [...(crawl.logs || []).reverse(), ...liveLogs];
+  const allLogs = dedupeLogs([...(crawl.logs || []).reverse(), ...liveLogs]);
 
   return (
     <div className="p-8">
@@ -116,6 +118,11 @@ function CrawlDetailPage() {
                 <XCircle size={18} />
                 Cancel
               </button>
+            )}
+            {crawl.status === "uploading" && (
+              <span className="px-4 py-2 text-sm text-muted-foreground border border-border rounded-md">
+                Uploading...
+              </span>
             )}
             {crawl.status === "completed" && crawl.outputPath && (
               <>
@@ -234,6 +241,7 @@ function StatusBadge({ status }: { status: string }) {
   const styles: Record<string, string> = {
     pending: "bg-yellow-100 text-yellow-800",
     running: "bg-blue-100 text-blue-800",
+    uploading: "bg-indigo-100 text-indigo-800",
     completed: "bg-green-100 text-green-800",
     failed: "bg-red-100 text-red-800",
     cancelled: "bg-gray-100 text-gray-800",
@@ -246,6 +254,17 @@ function StatusBadge({ status }: { status: string }) {
       {status}
     </span>
   );
+}
+
+function dedupeLogs(logs: Array<{ level: string; message: string; url?: string; timestamp?: string; createdAt?: string }>) {
+  const seen = new Set<string>();
+  return logs.filter((log) => {
+    const timestamp = "createdAt" in log ? log.createdAt : log.timestamp;
+    const key = `${log.level}|${log.message}|${log.url || ""}|${timestamp || ""}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function LogLevelBadge({ level }: { level: string }) {

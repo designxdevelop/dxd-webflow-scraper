@@ -104,6 +104,18 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
       },
     });
 
+    await db
+      .update(crawls)
+      .set({ status: "uploading" })
+      .where(eq(crawls.id, crawlId));
+
+    await publishEvent(crawlId, {
+      type: "log",
+      level: "info",
+      message: "Uploading output to storage",
+      timestamp: new Date().toISOString(),
+    });
+
     // Move output to permanent storage
     const finalPath = await storage.moveToFinal(outputDir, crawlId);
 

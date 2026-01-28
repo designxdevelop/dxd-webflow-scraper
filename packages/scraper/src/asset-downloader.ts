@@ -182,11 +182,15 @@ export class AssetDownloader {
         return true;
       }
 
+      // Allow Google Fonts domains
+      if (hostname.includes("fonts.googleapis.com") || hostname.includes("fonts.gstatic.com")) {
+        return true;
+      }
+
       // Block known third-party tracking/analytics domains
       const blockedDomains = [
         "googletagmanager.com",
         "google-analytics.com",
-        "gstatic.com",
         "facebook.net",
         "connect.facebook.net",
         "redditstatic.com",

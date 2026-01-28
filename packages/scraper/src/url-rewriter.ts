@@ -15,6 +15,7 @@ export async function rewriteHtmlDocument(options: RewriteOptions): Promise<stri
   if (removeWebflowBadge) {
     removeWebflowBadgeElement($);
   }
+  normalizeCloudflareScripts($);
   normalizeLazyMedia($);
 
   await processStylesheets($, pageUrl, assets);
@@ -53,6 +54,27 @@ function normalizeLazyMedia($: CheerioAPI) {
     const bg = $el.attr("data-bg");
     if (bg) {
       $el.attr("style", `${$el.attr("style") || ""};background-image:url(${bg})`);
+    }
+  });
+}
+
+function normalizeCloudflareScripts($: CheerioAPI) {
+  $("script").each((_, el) => {
+    const $el = $(el);
+    const src = $el.attr("src") || "";
+
+    if (src.includes("rocket-loader.min.js")) {
+      $el.remove();
+      return;
+    }
+
+    if ($el.attr("data-cfasync") !== undefined) {
+      $el.removeAttr("data-cfasync");
+    }
+
+    const type = ($el.attr("type") || "").toLowerCase();
+    if (type === "text/rocketscript") {
+      $el.attr("type", "text/javascript");
     }
   });
 }

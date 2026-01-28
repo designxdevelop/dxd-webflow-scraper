@@ -67,6 +67,21 @@ export function getAuthConfig(): AuthConfig {
         }
         return session;
       },
+      async redirect({ url, baseUrl }) {
+        // Allow redirects to the frontend domain
+        const frontendUrl = process.env.FRONTEND_URL || "https://archiver.designxdevelop.com";
+        
+        // If the URL starts with the frontend domain, allow it
+        if (url.startsWith(frontendUrl)) {
+          return url;
+        }
+        // If it's a relative URL, redirect to frontend
+        if (url.startsWith("/")) {
+          return `${frontendUrl}${url}`;
+        }
+        // Default to frontend home
+        return frontendUrl;
+      },
     },
     pages: {
       signIn: "/login",

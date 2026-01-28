@@ -17,9 +17,9 @@ function CrawlDetailPage() {
   const { data, isLoading, error } = useQuery({
     queryKey: ["crawls", crawlId],
     queryFn: () => crawlsApi.get(crawlId),
-    refetchInterval: (data) => {
+    refetchInterval: (query) => {
       // Stop polling once crawl is complete
-      const status = data?.crawl?.status;
+      const status = query.state.data?.crawl?.status;
       return status === "running" || status === "pending" || status === "uploading"
         ? 2000
         : false;
@@ -87,7 +87,7 @@ function CrawlDetailPage() {
                 {crawl.site?.name || "Unknown Site"}
               </h1>
               <StatusBadge status={crawl.status || "unknown"} />
-              {isRunning && (
+              {isActive && (
                 <span className="flex items-center gap-1 text-sm text-muted-foreground">
                   {connected ? (
                     <>
@@ -217,7 +217,7 @@ function CrawlDetailPage() {
                   <div key={i} className="py-1 flex gap-2">
                     <LogLevelBadge level={log.level} />
                     <span className="text-slate-400 shrink-0">
-                      {new Date("createdAt" in log ? log.createdAt : log.timestamp).toLocaleTimeString()}
+                      {new Date(getLogTimestamp(log)).toLocaleTimeString()}
                     </span>
                     <span className="break-all">{log.message}</span>
                     {log.url && (
@@ -256,11 +256,17 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function dedupeLogs(logs: Array<{ level: string; message: string; url?: string; timestamp?: string; createdAt?: string }>) {
+type CrawlLogLike = { level: string; message: string; url?: string | null; timestamp?: string; createdAt?: string };
+
+function getLogTimestamp(log: CrawlLogLike): string {
+  return "createdAt" in log && log.createdAt ? log.createdAt : log.timestamp || new Date().toISOString();
+}
+
+function dedupeLogs(logs: CrawlLogLike[]) {
   const seen = new Set<string>();
   return logs.filter((log) => {
-    const timestamp = "createdAt" in log ? log.createdAt : log.timestamp;
-    const key = `${log.level}|${log.message}|${log.url || ""}|${timestamp || ""}`;
+    const timestamp = getLogTimestamp(log);
+    const key = `${log.level}|${log.message}|${log.url || ""}|${timestamp}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

@@ -15,7 +15,17 @@ app.use("*", logger());
 app.use(
   "*",
   cors({
-    origin: ["http://localhost:5173", "http://localhost:3000"],
+    origin: (origin) => {
+      // Allow localhost for development and any Railway subdomain
+      const allowedPatterns = [
+        /^http:\/\/localhost:\d+$/,
+        /^https:\/\/.*\.up\.railway\.app$/,
+      ];
+      if (!origin || allowedPatterns.some((p) => p.test(origin))) {
+        return origin || "*";
+      }
+      return null;
+    },
     credentials: true,
   })
 );
@@ -36,7 +46,7 @@ app.route("/preview", previewRoutes);
 export type AppType = typeof app;
 
 // Start server
-const port = parseInt(process.env.API_PORT || "3001");
+const port = parseInt(process.env.PORT || process.env.API_PORT || "3001");
 
 console.log(`Starting API server on port ${port}...`);
 

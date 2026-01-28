@@ -49,7 +49,6 @@ function NewSitePage() {
     maxPages: null,
     removeWebflowBadge: true,
     scheduleEnabled: false,
-    storageType: "local",
   });
 
   const [scheduleFrequency, setScheduleFrequency] = useState<ScheduleFrequency>("daily");

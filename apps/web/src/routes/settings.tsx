@@ -20,13 +20,6 @@ function SettingsPage() {
   const [formData, setFormData] = useState({
     defaultConcurrency: 5,
     defaultMaxPages: "",
-    storageType: "local",
-    localStoragePath: "./data",
-    s3Endpoint: "",
-    s3AccessKeyId: "",
-    s3SecretAccessKey: "",
-    s3Bucket: "",
-    s3Region: "auto",
   });
 
   useEffect(() => {
@@ -34,13 +27,6 @@ function SettingsPage() {
       setFormData({
         defaultConcurrency: (data.settings.defaultConcurrency as number) || 5,
         defaultMaxPages: (data.settings.defaultMaxPages as string) || "",
-        storageType: (data.settings.storageType as string) || "local",
-        localStoragePath: (data.settings.localStoragePath as string) || "./data",
-        s3Endpoint: (data.settings.s3Endpoint as string) || "",
-        s3AccessKeyId: (data.settings.s3AccessKeyId as string) || "",
-        s3SecretAccessKey: (data.settings.s3SecretAccessKey as string) || "",
-        s3Bucket: (data.settings.s3Bucket as string) || "",
-        s3Region: (data.settings.s3Region as string) || "auto",
       });
     }
   }, [data]);
@@ -114,105 +100,6 @@ function SettingsPage() {
               />
             </div>
           </div>
-        </div>
-
-        {/* Storage Settings */}
-        <div className="bg-card border border-border rounded-lg p-6 space-y-4">
-          <h2 className="text-lg font-semibold">Storage</h2>
-          <p className="text-sm text-muted-foreground">
-            Configure where archived sites are stored
-          </p>
-
-          <div>
-            <label className="block text-sm font-medium mb-1">Storage Type</label>
-            <select
-              value={formData.storageType}
-              onChange={(e) => setFormData({ ...formData, storageType: e.target.value })}
-              className="w-full px-3 py-2 border border-input rounded-md bg-background"
-            >
-              <option value="local">Local Filesystem</option>
-              <option value="s3">S3 / R2 Compatible</option>
-            </select>
-          </div>
-
-          {formData.storageType === "local" && (
-            <div>
-              <label className="block text-sm font-medium mb-1">Storage Path</label>
-              <input
-                type="text"
-                value={formData.localStoragePath}
-                onChange={(e) =>
-                  setFormData({ ...formData, localStoragePath: e.target.value })
-                }
-                className="w-full px-3 py-2 border border-input rounded-md bg-background"
-                placeholder="./data"
-              />
-            </div>
-          )}
-
-          {formData.storageType === "s3" && (
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">Endpoint URL</label>
-                <input
-                  type="url"
-                  value={formData.s3Endpoint}
-                  onChange={(e) => setFormData({ ...formData, s3Endpoint: e.target.value })}
-                  className="w-full px-3 py-2 border border-input rounded-md bg-background"
-                  placeholder="https://xxx.r2.cloudflarestorage.com"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium mb-1">Access Key ID</label>
-                  <input
-                    type="text"
-                    value={formData.s3AccessKeyId}
-                    onChange={(e) =>
-                      setFormData({ ...formData, s3AccessKeyId: e.target.value })
-                    }
-                    className="w-full px-3 py-2 border border-input rounded-md bg-background"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-1">Secret Access Key</label>
-                  <input
-                    type="password"
-                    value={formData.s3SecretAccessKey}
-                    onChange={(e) =>
-                      setFormData({ ...formData, s3SecretAccessKey: e.target.value })
-                    }
-                    className="w-full px-3 py-2 border border-input rounded-md bg-background"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium mb-1">Bucket</label>
-                  <input
-                    type="text"
-                    value={formData.s3Bucket}
-                    onChange={(e) => setFormData({ ...formData, s3Bucket: e.target.value })}
-                    className="w-full px-3 py-2 border border-input rounded-md bg-background"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-1">Region</label>
-                  <input
-                    type="text"
-                    value={formData.s3Region}
-                    onChange={(e) => setFormData({ ...formData, s3Region: e.target.value })}
-                    className="w-full px-3 py-2 border border-input rounded-md bg-background"
-                    placeholder="auto"
-                  />
-                </div>
-              </div>
-            </div>
-          )}
         </div>
 
         <div className="flex items-center justify-end gap-4">

@@ -35,7 +35,7 @@ dxd-webflow-scraper/
 
 ### Prerequisites
 
-- [Bun](https://bun.sh/) >= 1.2.0
+- [Bun](https://bun.sh/) >= 1.3.6
 - Docker (for PostgreSQL and Redis)
 - Playwright browsers
 
@@ -118,16 +118,16 @@ Open http://localhost:5173 for the dashboard.
 
 ## API
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/sites` | List all sites |
-| `POST /api/sites` | Create a site |
-| `POST /api/sites/:id/crawl` | Start a crawl |
-| `GET /api/crawls` | List crawls |
-| `GET /api/crawls/:id` | Get crawl details |
-| `GET /api/sse/crawls/:id` | SSE stream for live logs |
-| `GET /api/crawls/:id/download` | Download archive as zip |
-| `GET /preview/:crawlId/*` | Preview archived files |
+| Endpoint                       | Description              |
+| ------------------------------ | ------------------------ |
+| `GET /api/sites`               | List all sites           |
+| `POST /api/sites`              | Create a site            |
+| `POST /api/sites/:id/crawl`    | Start a crawl            |
+| `GET /api/crawls`              | List crawls              |
+| `GET /api/crawls/:id`          | Get crawl details        |
+| `GET /api/sse/crawls/:id`      | SSE stream for live logs |
+| `GET /api/crawls/:id/download` | Download archive as zip  |
+| `GET /preview/:crawlId/*`      | Preview archived files   |
 
 ## Deployment
 

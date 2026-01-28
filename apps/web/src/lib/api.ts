@@ -67,8 +67,6 @@ export interface CreateSiteInput {
   redirectsCsv?: string | null;
   scheduleEnabled?: boolean;
   scheduleCron?: string | null;
-  storageType?: "local" | "s3";
-  storagePath?: string | null;
 }
 
 export interface UpdateSiteInput extends Partial<CreateSiteInput> {}

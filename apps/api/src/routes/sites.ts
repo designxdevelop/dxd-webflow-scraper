@@ -40,6 +40,22 @@ function getNextScheduledAt(scheduleEnabled: boolean, scheduleCron?: string | nu
   }
 }
 
+function getDefaultStorageType(): "local" | "s3" {
+  const explicit = process.env.STORAGE_TYPE;
+  if (explicit === "s3" || explicit === "local") {
+    return explicit;
+  }
+
+  const endpoint = process.env.S3_ENDPOINT || process.env.R2_ENDPOINT;
+  const accessKeyId = process.env.S3_ACCESS_KEY_ID || process.env.R2_ACCESS_KEY_ID;
+  const secretAccessKey =
+    process.env.S3_SECRET_ACCESS_KEY || process.env.R2_SECRET_ACCESS_KEY;
+  const bucket = process.env.S3_BUCKET || process.env.R2_BUCKET;
+
+  const hasS3Config = Boolean(endpoint && accessKeyId && secretAccessKey && bucket);
+  return hasS3Config ? "s3" : "local";
+}
+
 // List all sites
 app.get("/", async (c) => {
   const allSites = await db.query.sites.findMany({
@@ -102,7 +118,7 @@ app.post("/", zValidator("json", createSiteSchema), async (c) => {
       scheduleEnabled,
       scheduleCron,
       nextScheduledAt,
-      storageType: data.storageType ?? "local",
+      storageType: data.storageType ?? getDefaultStorageType(),
       storagePath: data.storagePath,
     })
     .returning();

@@ -198,10 +198,6 @@ function SiteDetailPage() {
                 <dt className="text-sm text-muted-foreground">Remove Badge</dt>
                 <dd className="font-medium">{site.removeWebflowBadge ? "Yes" : "No"}</dd>
               </div>
-              <div>
-                <dt className="text-sm text-muted-foreground">Storage</dt>
-                <dd className="font-medium capitalize">{site.storageType || "local"}</dd>
-              </div>
             </dl>
           </div>
 

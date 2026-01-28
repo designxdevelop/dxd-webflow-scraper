@@ -7,6 +7,30 @@ import path from "node:path";
 
 const app = new Hono();
 
+/**
+ * Inject a <base> tag into HTML to make absolute asset paths work.
+ * The scraped HTML uses absolute paths like /css/style.css, /images/logo.png
+ * but when served at /preview/{crawlId}/, these paths would 404.
+ * The <base> tag tells the browser to resolve all URLs relative to the crawl path.
+ */
+function injectBaseTag(html: string, basePath: string): string {
+  const baseTag = `<base href="${basePath}">`;
+
+  // Try to inject after <head> tag
+  if (html.includes("<head>")) {
+    return html.replace("<head>", `<head>\n    ${baseTag}`);
+  }
+
+  // Try to inject after <head ...> tag with attributes
+  const headMatch = html.match(/<head[^>]*>/i);
+  if (headMatch) {
+    return html.replace(headMatch[0], `${headMatch[0]}\n    ${baseTag}`);
+  }
+
+  // Fallback: inject at the very beginning
+  return baseTag + html;
+}
+
 // Serve preview files from storage
 app.get("/:crawlId/*", async (c) => {
   const crawlId = c.req.param("crawlId");
@@ -31,8 +55,10 @@ app.get("/:crawlId/*", async (c) => {
       const indexPath = `${fullPath}/index.html`;
       const indexExists = await storage.exists(indexPath);
       if (indexExists) {
-        const content = await storage.readFile(indexPath);
-        return new Response(new Uint8Array(content), {
+        let content = await storage.readFile(indexPath);
+        // Inject base tag for HTML files
+        const html = injectBaseTag(content.toString("utf-8"), `/preview/${crawlId}/`);
+        return new Response(html, {
           headers: {
             "Content-Type": "text/html; charset=utf-8",
           },
@@ -43,6 +69,17 @@ app.get("/:crawlId/*", async (c) => {
 
     const content = await storage.readFile(fullPath);
     const contentType = getContentType(filePath);
+
+    // Inject base tag for HTML files so absolute asset paths work
+    if (contentType.includes("text/html")) {
+      const html = injectBaseTag(content.toString("utf-8"), `/preview/${crawlId}/`);
+      return new Response(html, {
+        headers: {
+          "Content-Type": contentType,
+          "Cache-Control": "public, max-age=3600",
+        },
+      });
+    }
 
     return new Response(new Uint8Array(content), {
       headers: {

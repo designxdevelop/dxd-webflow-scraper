@@ -26,10 +26,10 @@ function getStorageConfig(): StorageConfig {
     return {
       type: "s3",
       s3: {
-        endpoint: s3Env.endpoint,
-        accessKeyId: s3Env.accessKeyId,
-        secretAccessKey: s3Env.secretAccessKey,
-        bucket: s3Env.bucket,
+        endpoint: s3Env.endpoint!,
+        accessKeyId: s3Env.accessKeyId!,
+        secretAccessKey: s3Env.secretAccessKey!,
+        bucket: s3Env.bucket!,
         region: s3Env.region,
         publicUrl: s3Env.publicUrl,
         forcePathStyle: s3Env.forcePathStyle,

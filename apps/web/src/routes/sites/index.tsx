@@ -33,6 +33,14 @@ function SitesPage() {
 
   const sites = data?.sites || [];
 
+  const formatHostname = (url: string) => {
+    try {
+      return new URL(url).hostname;
+    } catch {
+      return url;
+    }
+  };
+
   return (
     <div className="p-8">
       <div className="flex items-center justify-between mb-8">
@@ -105,7 +113,7 @@ function SitesPage() {
                       rel="noopener noreferrer"
                       className="text-sm text-muted-foreground hover:text-primary flex items-center gap-1"
                     >
-                      {new URL(site.url).hostname}
+                      {formatHostname(site.url)}
                       <ExternalLink size={12} />
                     </a>
                   </td>

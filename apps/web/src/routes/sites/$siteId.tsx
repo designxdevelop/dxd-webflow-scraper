@@ -2,6 +2,61 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { sitesApi, crawlsApi } from "@/lib/api";
 import { ArrowLeft, Play, ExternalLink, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
+
+type ScheduleFrequency = "daily" | "weekly";
+
+const WEEKDAYS = [
+  { label: "Sun", value: "0" },
+  { label: "Mon", value: "1" },
+  { label: "Tue", value: "2" },
+  { label: "Wed", value: "3" },
+  { label: "Thu", value: "4" },
+  { label: "Fri", value: "5" },
+  { label: "Sat", value: "6" },
+];
+
+function toCronExpression(frequency: ScheduleFrequency, time: string, days: string[]): string | null {
+  const [hourString, minuteString] = time.split(":");
+  const hour = Number.parseInt(hourString, 10);
+  const minute = Number.parseInt(minuteString, 10);
+
+  if (Number.isNaN(hour) || Number.isNaN(minute)) {
+    return null;
+  }
+
+  if (frequency === "daily") {
+    return `${minute} ${hour} * * *`;
+  }
+
+  const dayList = days.length > 0 ? days.join(",") : "1";
+  return `${minute} ${hour} * * ${dayList}`;
+}
+
+function parseCron(cron: string | null): {
+  frequency: ScheduleFrequency;
+  time: string;
+  days: string[];
+} {
+  if (!cron) {
+    return { frequency: "daily", time: "05:00", days: ["1"] };
+  }
+
+  const parts = cron.split(" ");
+  if (parts.length < 5) {
+    return { frequency: "daily", time: "05:00", days: ["1"] };
+  }
+
+  const [minute, hour, , , dayOfWeek] = parts;
+  const time = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+
+  if (dayOfWeek === "*") {
+    return { frequency: "daily", time, days: ["1"] };
+  }
+
+  const days = dayOfWeek.split(",").filter(Boolean);
+  return { frequency: "weekly", time, days: days.length > 0 ? days : ["1"] };
+}
 
 export const Route = createFileRoute("/sites/$siteId")({
   component: SiteDetailPage,
@@ -17,6 +72,11 @@ function SiteDetailPage() {
     queryFn: () => sitesApi.get(siteId),
   });
 
+  const [scheduleEnabled, setScheduleEnabled] = useState(false);
+  const [scheduleFrequency, setScheduleFrequency] = useState<ScheduleFrequency>("daily");
+  const [scheduleTime, setScheduleTime] = useState("05:00");
+  const [scheduleDays, setScheduleDays] = useState<string[]>(["1"]);
+
   const startCrawlMutation = useMutation({
     mutationFn: () => sitesApi.startCrawl(siteId),
     onSuccess: (data) => {
@@ -31,6 +91,14 @@ function SiteDetailPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["sites"] });
       navigate({ to: "/sites" });
+    },
+  });
+
+  const scheduleMutation = useMutation({
+    mutationFn: (payload: { scheduleEnabled: boolean; scheduleCron: string | null }) =>
+      sitesApi.update(siteId, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["sites", siteId] });
     },
   });
 
@@ -51,6 +119,14 @@ function SiteDetailPage() {
   }
 
   const { site } = data;
+
+  useEffect(() => {
+    const parsed = parseCron(site.scheduleCron ?? null);
+    setScheduleEnabled(site.scheduleEnabled ?? false);
+    setScheduleFrequency(parsed.frequency);
+    setScheduleTime(parsed.time);
+    setScheduleDays(parsed.days);
+  }, [site.scheduleCron, site.scheduleEnabled]);
 
   return (
     <div className="p-8">
@@ -127,30 +203,133 @@ function SiteDetailPage() {
 
           <div className="bg-card border border-border rounded-lg p-6">
             <h2 className="text-lg font-semibold mb-4">Schedule</h2>
-            {site.scheduleEnabled ? (
-              <dl className="space-y-3">
-                <div>
-                  <dt className="text-sm text-muted-foreground">Summary</dt>
-                  <dd className="font-medium">
-                    {formatScheduleSummary(site.scheduleCron) || "Custom schedule"}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-sm text-muted-foreground">Cron</dt>
-                  <dd className="font-medium font-mono text-sm">{site.scheduleCron}</dd>
-                </div>
-                {site.nextScheduledAt && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="scheduleEnabled"
+                  checked={scheduleEnabled}
+                  onChange={(e) => setScheduleEnabled(e.target.checked)}
+                  className="rounded"
+                />
+                <label htmlFor="scheduleEnabled" className="text-sm">
+                  Enable scheduled crawls
+                </label>
+              </div>
+
+              {scheduleEnabled ? (
+                <>
                   <div>
-                    <dt className="text-sm text-muted-foreground">Next Run</dt>
-                    <dd className="font-medium">
-                      {new Date(site.nextScheduledAt).toLocaleString()}
-                    </dd>
+                    <label className="block text-sm font-medium mb-1">Frequency</label>
+                    <div className="flex gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setScheduleFrequency("daily")}
+                        className={`px-3 py-2 rounded-md text-sm border ${
+                          scheduleFrequency === "daily"
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "bg-background border-input"
+                        }`}
+                      >
+                        Daily
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setScheduleFrequency("weekly")}
+                        className={`px-3 py-2 rounded-md text-sm border ${
+                          scheduleFrequency === "weekly"
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "bg-background border-input"
+                        }`}
+                      >
+                        Weekly
+                      </button>
+                    </div>
                   </div>
-                )}
-              </dl>
-            ) : (
-              <p className="text-muted-foreground text-sm">Scheduling disabled</p>
-            )}
+
+                  {scheduleFrequency === "weekly" && (
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Days</label>
+                      <div className="flex flex-wrap gap-2">
+                        {WEEKDAYS.map((day) => {
+                          const isSelected = scheduleDays.includes(day.value);
+                          return (
+                            <button
+                              key={day.value}
+                              type="button"
+                              onClick={() => {
+                                const next = isSelected
+                                  ? scheduleDays.filter((d) => d !== day.value)
+                                  : [...scheduleDays, day.value];
+                                setScheduleDays(next.length > 0 ? next : ["1"]);
+                              }}
+                              className={`px-2 py-1 rounded-md text-xs border ${
+                                isSelected
+                                  ? "bg-primary text-primary-foreground border-primary"
+                                  : "bg-background border-input"
+                              }`}
+                            >
+                              {day.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Time</label>
+                    <input
+                      type="time"
+                      value={scheduleTime}
+                      onChange={(e) => setScheduleTime(e.target.value)}
+                      className="w-full px-3 py-2 border border-input rounded-md bg-background"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Times are interpreted in the server timezone (UTC on Railway)
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <p className="text-muted-foreground text-sm">Scheduling disabled</p>
+              )}
+
+              <div>
+                <label className="block text-sm font-medium mb-1">Generated Cron</label>
+                <div className="px-3 py-2 border border-input rounded-md bg-muted/30 font-mono text-sm">
+                  {scheduleEnabled
+                    ? toCronExpression(scheduleFrequency, scheduleTime, scheduleDays) || "Invalid time"
+                    : "—"}
+                </div>
+              </div>
+
+              {site.nextScheduledAt && (
+                <div>
+                  <label className="block text-sm font-medium mb-1">Next Run</label>
+                  <div className="text-sm text-muted-foreground">
+                    {new Date(site.nextScheduledAt).toLocaleString()}
+                  </div>
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => {
+                  const scheduleCron = scheduleEnabled
+                    ? toCronExpression(scheduleFrequency, scheduleTime, scheduleDays)
+                    : null;
+
+                  scheduleMutation.mutate({
+                    scheduleEnabled,
+                    scheduleCron,
+                  });
+                }}
+                disabled={scheduleMutation.isPending}
+                className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50"
+              >
+                {scheduleMutation.isPending ? "Saving..." : "Update Schedule"}
+              </button>
+            </div>
           </div>
         </div>
 

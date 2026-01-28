@@ -72,6 +72,7 @@ export function getAuthConfig(): AuthConfig {
       signIn: "/login",
       error: "/login",
     },
+    basePath: "/api/auth",
     trustHost: true,
     secret: process.env.AUTH_SECRET,
   };

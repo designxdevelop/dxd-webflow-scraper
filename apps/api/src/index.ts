@@ -22,10 +22,11 @@ app.use(
   "*",
   cors({
     origin: (origin) => {
-      // Allow localhost for development and any Railway subdomain
+      // Allow localhost for development, Railway subdomains, and custom domains
       const allowedPatterns = [
         /^http:\/\/localhost:\d+$/,
         /^https:\/\/.*\.up\.railway\.app$/,
+        /^https:\/\/.*\.designxdevelop\.com$/,
       ];
       if (!origin || allowedPatterns.some((p) => p.test(origin))) {
         return origin || "*";

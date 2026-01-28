@@ -77,6 +77,20 @@ function SiteDetailPage() {
   const [scheduleTime, setScheduleTime] = useState("05:00");
   const [scheduleDays, setScheduleDays] = useState<string[]>(["1"]);
 
+  const site = data?.site;
+
+  useEffect(() => {
+    if (!site) {
+      return;
+    }
+
+    const parsed = parseCron(site.scheduleCron ?? null);
+    setScheduleEnabled(site.scheduleEnabled ?? false);
+    setScheduleFrequency(parsed.frequency);
+    setScheduleTime(parsed.time);
+    setScheduleDays(parsed.days);
+  }, [site?.scheduleCron, site?.scheduleEnabled]);
+
   const startCrawlMutation = useMutation({
     mutationFn: () => sitesApi.startCrawl(siteId),
     onSuccess: (data) => {
@@ -110,23 +124,13 @@ function SiteDetailPage() {
     );
   }
 
-  if (error || !data) {
+  if (error || !site) {
     return (
       <div className="p-8">
         <p className="text-destructive">Failed to load site</p>
       </div>
     );
   }
-
-  const { site } = data;
-
-  useEffect(() => {
-    const parsed = parseCron(site.scheduleCron ?? null);
-    setScheduleEnabled(site.scheduleEnabled ?? false);
-    setScheduleFrequency(parsed.frequency);
-    setScheduleTime(parsed.time);
-    setScheduleDays(parsed.days);
-  }, [site.scheduleCron, site.scheduleEnabled]);
 
   return (
     <div className="p-8">

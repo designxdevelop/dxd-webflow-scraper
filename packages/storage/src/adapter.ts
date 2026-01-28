@@ -22,5 +22,7 @@ export interface StorageConfig {
     secretAccessKey: string;
     bucket: string;
     region: string;
+    publicUrl?: string;
+    forcePathStyle?: boolean;
   };
 }

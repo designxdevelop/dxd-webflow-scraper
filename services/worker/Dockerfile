@@ -1,4 +1,4 @@
-FROM oven/bun:1.3.6
+FROM oven/bun:latest
 
 WORKDIR /app
 
@@ -10,6 +10,7 @@ COPY package.json bun.lock turbo.json tsconfig.json ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/scraper/package.json packages/scraper/package.json
+COPY packages/storage/package.json packages/storage/package.json
 COPY services/worker/package.json services/worker/package.json
 
 RUN bun install --frozen-lockfile

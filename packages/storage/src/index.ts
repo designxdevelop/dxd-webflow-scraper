@@ -1,5 +1,6 @@
 import type { StorageAdapter, StorageConfig } from "./adapter.js";
 import { LocalStorage } from "./local.js";
+import { S3Storage } from "./s3.js";
 
 let storageInstance: StorageAdapter | null = null;
 
@@ -23,6 +24,8 @@ function getStorageConfig(): StorageConfig {
         secretAccessKey: process.env.S3_SECRET_ACCESS_KEY!,
         bucket: process.env.S3_BUCKET!,
         region: process.env.S3_REGION || "auto",
+        publicUrl: process.env.S3_PUBLIC_URL,
+        forcePathStyle: process.env.S3_FORCE_PATH_STYLE === "true",
       },
     };
   }
@@ -38,9 +41,13 @@ function createStorage(config: StorageConfig): StorageAdapter {
     return new LocalStorage(config.localPath || "./data");
   }
 
-  // TODO: Implement S3 storage
-  throw new Error("S3 storage not yet implemented");
+  if (!config.s3) {
+    throw new Error("Missing S3 configuration");
+  }
+
+  return new S3Storage(config.s3);
 }
 
 export type { StorageAdapter, StorageConfig } from "./adapter.js";
 export { LocalStorage } from "./local.js";
+export { S3Storage } from "./s3.js";

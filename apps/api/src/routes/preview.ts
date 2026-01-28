@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { eq } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { crawls } from "../db/schema.js";
-import { getStorage } from "../storage/index.js";
+import { getStorage } from "@dxd/storage";
 import path from "node:path";
 
 const app = new Hono();

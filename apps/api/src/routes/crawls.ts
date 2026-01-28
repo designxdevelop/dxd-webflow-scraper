@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { eq, desc, and } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { crawls, crawlLogs, sites } from "../db/schema.js";
-import { getStorage } from "../storage/index.js";
+import { getStorage } from "@dxd/storage";
 import archiver from "archiver";
 import { Readable } from "node:stream";
 

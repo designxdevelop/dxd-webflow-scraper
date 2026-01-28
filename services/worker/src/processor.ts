@@ -2,12 +2,12 @@ import { Worker, Job } from "bullmq";
 import Redis from "ioredis";
 import { eq } from "drizzle-orm";
 import { crawlSite, type CrawlProgress, type LogLevel } from "@dxd/scraper";
+import { getStorage } from "@dxd/storage";
 import { db, sites, crawls, crawlLogs } from "./db.js";
-import path from "node:path";
 import fs from "node:fs/promises";
 
 const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
-const storagePath = process.env.LOCAL_STORAGE_PATH || "./data";
+const storage = getStorage();
 
 // Redis for pub/sub
 const pubClient = new Redis(redisUrl);
@@ -54,8 +54,7 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
   });
 
   // Create output directory
-  const outputDir = path.join(storagePath, "temp", crawlId);
-  await fs.mkdir(outputDir, { recursive: true });
+  const outputDir = await storage.createTempDir(crawlId);
 
   try {
     const result = await crawlSite({
@@ -106,12 +105,10 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
     });
 
     // Move output to permanent storage
-    const finalPath = path.join(storagePath, "archives", crawlId);
-    await fs.mkdir(path.dirname(finalPath), { recursive: true });
-    await fs.rename(outputDir, finalPath);
+    const finalPath = await storage.moveToFinal(outputDir, crawlId);
 
     // Calculate output size
-    const outputSize = await getDirectorySize(finalPath);
+    const outputSize = await storage.getSize(finalPath);
 
     // Update crawl as completed
     await db
@@ -119,7 +116,7 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
       .set({
         status: "completed",
         completedAt: new Date(),
-        outputPath: `archives/${crawlId}`,
+        outputPath: finalPath,
         outputSizeBytes: outputSize,
         totalPages: result.total,
         succeededPages: result.succeeded,
@@ -167,29 +164,6 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
   }
 }
 
-async function getDirectorySize(dirPath: string): Promise<number> {
-  let totalSize = 0;
-
-  async function walk(dir: string) {
-    try {
-      const entries = await fs.readdir(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        const entryPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          await walk(entryPath);
-        } else {
-          const stat = await fs.stat(entryPath);
-          totalSize += stat.size;
-        }
-      }
-    } catch {
-      // Directory doesn't exist
-    }
-  }
-
-  await walk(dirPath);
-  return totalSize;
-}
 
 export function startWorker() {
   const worker = new Worker<CrawlJobData>("crawl-jobs", processCrawlJob, {

@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { serve } from "@hono/node-server";
-import { authHandler, initAuthConfig, verifyAuth } from "@hono/auth-js";
+import { authHandler, initAuthConfig } from "@hono/auth-js";
 import { getAuthConfig } from "./auth/config.js";
 import { requireAuth, type AuthVariables } from "./auth/middleware.js";
 import { sitesRoutes } from "./routes/sites.js";
@@ -44,8 +44,9 @@ app.get("/health", (c) => c.json({ status: "ok", timestamp: new Date().toISOStri
 app.use("/api/auth/*", authHandler());
 
 // Auth check endpoint (public) - returns current session
-app.get("/api/me", verifyAuth(), (c) => {
-  const auth = c.get("authUser");
+app.get("/api/me", async (c) => {
+  const { getAuthUser } = await import("@hono/auth-js");
+  const auth = await getAuthUser(c);
   if (!auth?.session?.user) {
     return c.json({ user: null });
   }

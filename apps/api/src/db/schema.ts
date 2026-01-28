@@ -8,8 +8,84 @@ import {
   boolean,
   timestamp,
   jsonb,
+  primaryKey,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
+import type { AdapterAccountType } from "@auth/core/adapters";
+
+// ============================================================
+// Auth.js tables (for GitHub OAuth)
+// ============================================================
+
+export const users = pgTable("users", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => crypto.randomUUID()),
+  name: text("name"),
+  email: text("email").unique(),
+  emailVerified: timestamp("email_verified", { mode: "date" }),
+  image: text("image"),
+  // Custom fields for access control
+  role: varchar("role", { length: 50 }).default("user"), // "admin" | "user"
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+
+export const accounts = pgTable(
+  "accounts",
+  {
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    type: text("type").$type<AdapterAccountType>().notNull(),
+    provider: text("provider").notNull(),
+    providerAccountId: text("provider_account_id").notNull(),
+    refresh_token: text("refresh_token"),
+    access_token: text("access_token"),
+    expires_at: integer("expires_at"),
+    token_type: text("token_type"),
+    scope: text("scope"),
+    id_token: text("id_token"),
+    session_state: text("session_state"),
+  },
+  (account) => [
+    primaryKey({ columns: [account.provider, account.providerAccountId] }),
+  ]
+);
+
+export const sessions = pgTable("sessions", {
+  sessionToken: text("session_token").primaryKey(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  expires: timestamp("expires", { mode: "date" }).notNull(),
+});
+
+export const verificationTokens = pgTable(
+  "verification_tokens",
+  {
+    identifier: text("identifier").notNull(),
+    token: text("token").notNull(),
+    expires: timestamp("expires", { mode: "date" }).notNull(),
+  },
+  (verificationToken) => [
+    primaryKey({
+      columns: [verificationToken.identifier, verificationToken.token],
+    }),
+  ]
+);
+
+// Allowed emails/domains for access control
+export const allowedEmails = pgTable("allowed_emails", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  email: varchar("email", { length: 255 }), // specific email or null for domain match
+  domain: varchar("domain", { length: 255 }), // domain pattern like "designxdevelop.com"
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  createdBy: text("created_by").references(() => users.id),
+});
+
+// ============================================================
+// Application tables
+// ============================================================
 
 export const sites = pgTable("sites", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -98,7 +174,29 @@ export const crawlLogsRelations = relations(crawlLogs, ({ one }) => ({
   }),
 }));
 
+// Auth relations
+export const usersRelations = relations(users, ({ many }) => ({
+  accounts: many(accounts),
+  sessions: many(sessions),
+}));
+
+export const accountsRelations = relations(accounts, ({ one }) => ({
+  user: one(users, {
+    fields: [accounts.userId],
+    references: [users.id],
+  }),
+}));
+
+export const sessionsRelations = relations(sessions, ({ one }) => ({
+  user: one(users, {
+    fields: [sessions.userId],
+    references: [users.id],
+  }),
+}));
+
 // Types
+export type User = typeof users.$inferSelect;
+export type NewUser = typeof users.$inferInsert;
 export type Site = typeof sites.$inferSelect;
 export type NewSite = typeof sites.$inferInsert;
 export type Crawl = typeof crawls.$inferSelect;
@@ -106,3 +204,4 @@ export type NewCrawl = typeof crawls.$inferInsert;
 export type CrawlLog = typeof crawlLogs.$inferSelect;
 export type NewCrawlLog = typeof crawlLogs.$inferInsert;
 export type Setting = typeof settings.$inferSelect;
+export type AllowedEmail = typeof allowedEmails.$inferSelect;

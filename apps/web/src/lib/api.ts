@@ -1,5 +1,17 @@
 // API client for the backend
-const API_BASE = "/api";
+const API_URL = import.meta.env.VITE_API_URL || "";
+const API_BASE = `${API_URL}/api`;
+
+// Helper to make authenticated requests
+async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
+  return fetch(url, {
+    ...options,
+    credentials: "include",
+    headers: {
+      ...options.headers,
+    },
+  });
+}
 
 export interface Site {
   id: string;
@@ -64,19 +76,19 @@ export interface UpdateSiteInput extends Partial<CreateSiteInput> {}
 // Sites API
 export const sitesApi = {
   list: async (): Promise<{ sites: Site[] }> => {
-    const res = await fetch(`${API_BASE}/sites`);
+    const res = await fetchWithAuth(`${API_BASE}/sites`);
     if (!res.ok) throw new Error("Failed to fetch sites");
     return res.json();
   },
 
   get: async (id: string): Promise<{ site: Site & { crawls: Crawl[] } }> => {
-    const res = await fetch(`${API_BASE}/sites/${id}`);
+    const res = await fetchWithAuth(`${API_BASE}/sites/${id}`);
     if (!res.ok) throw new Error("Failed to fetch site");
     return res.json();
   },
 
   create: async (data: CreateSiteInput): Promise<{ site: Site }> => {
-    const res = await fetch(`${API_BASE}/sites`, {
+    const res = await fetchWithAuth(`${API_BASE}/sites`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
@@ -86,7 +98,7 @@ export const sitesApi = {
   },
 
   update: async (id: string, data: UpdateSiteInput): Promise<{ site: Site }> => {
-    const res = await fetch(`${API_BASE}/sites/${id}`, {
+    const res = await fetchWithAuth(`${API_BASE}/sites/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
@@ -96,12 +108,12 @@ export const sitesApi = {
   },
 
   delete: async (id: string): Promise<void> => {
-    const res = await fetch(`${API_BASE}/sites/${id}`, { method: "DELETE" });
+    const res = await fetchWithAuth(`${API_BASE}/sites/${id}`, { method: "DELETE" });
     if (!res.ok) throw new Error("Failed to delete site");
   },
 
   startCrawl: async (id: string): Promise<{ crawl: Crawl }> => {
-    const res = await fetch(`${API_BASE}/sites/${id}/crawl`, { method: "POST" });
+    const res = await fetchWithAuth(`${API_BASE}/sites/${id}/crawl`, { method: "POST" });
     if (!res.ok) throw new Error("Failed to start crawl");
     return res.json();
   },
@@ -122,42 +134,42 @@ export const crawlsApi = {
     if (params?.offset) searchParams.set("offset", params.offset.toString());
 
     const url = `${API_BASE}/crawls${searchParams.toString() ? `?${searchParams}` : ""}`;
-    const res = await fetch(url);
+    const res = await fetchWithAuth(url);
     if (!res.ok) throw new Error("Failed to fetch crawls");
     return res.json();
   },
 
   get: async (id: string): Promise<{ crawl: Crawl & { logs: CrawlLog[] } }> => {
-    const res = await fetch(`${API_BASE}/crawls/${id}`);
+    const res = await fetchWithAuth(`${API_BASE}/crawls/${id}`);
     if (!res.ok) throw new Error("Failed to fetch crawl");
     return res.json();
   },
 
   cancel: async (id: string): Promise<{ crawl: Crawl }> => {
-    const res = await fetch(`${API_BASE}/crawls/${id}/cancel`, { method: "POST" });
+    const res = await fetchWithAuth(`${API_BASE}/crawls/${id}/cancel`, { method: "POST" });
     if (!res.ok) throw new Error("Failed to cancel crawl");
     return res.json();
   },
 
   getDownloadUrl: (id: string): string => {
-    return `${API_BASE}/crawls/${id}/download`;
+    return `${API_URL}/api/crawls/${id}/download`;
   },
 
   getPreviewUrl: (id: string): string => {
-    return `/preview/${id}/`;
+    return `${API_URL}/preview/${id}/`;
   },
 };
 
 // Settings API
 export const settingsApi = {
   get: async (): Promise<{ settings: Record<string, unknown> }> => {
-    const res = await fetch(`${API_BASE}/settings`);
+    const res = await fetchWithAuth(`${API_BASE}/settings`);
     if (!res.ok) throw new Error("Failed to fetch settings");
     return res.json();
   },
 
   update: async (data: Record<string, unknown>): Promise<void> => {
-    const res = await fetch(`${API_BASE}/settings`, {
+    const res = await fetchWithAuth(`${API_BASE}/settings`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
@@ -165,3 +177,6 @@ export const settingsApi = {
     if (!res.ok) throw new Error("Failed to update settings");
   },
 };
+
+// Export API_URL for other uses
+export { API_URL };

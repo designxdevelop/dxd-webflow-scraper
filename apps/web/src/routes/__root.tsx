@@ -1,6 +1,8 @@
-import { createRootRouteWithContext, Outlet, Link } from "@tanstack/react-router";
+import { createRootRouteWithContext, Outlet, Link, useLocation, useNavigate } from "@tanstack/react-router";
 import { QueryClient } from "@tanstack/react-query";
-import { Globe, History, Settings, LayoutDashboard } from "lucide-react";
+import { Globe, History, Settings, LayoutDashboard, LogOut } from "lucide-react";
+import { useSession, useSignOut } from "../lib/auth";
+import { useEffect } from "react";
 
 interface RouterContext {
   queryClient: QueryClient;
@@ -11,6 +13,39 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 });
 
 function RootLayout() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { data: session, isLoading } = useSession();
+  const signOut = useSignOut();
+
+  const isLoginPage = location.pathname === "/login";
+
+  // Redirect to login if not authenticated (except on login page)
+  useEffect(() => {
+    if (!isLoading && !session?.user && !isLoginPage) {
+      navigate({ to: "/login" });
+    }
+  }, [isLoading, session, isLoginPage, navigate]);
+
+  // Show login page without layout
+  if (isLoginPage) {
+    return <Outlet />;
+  }
+
+  // Show loading while checking auth
+  if (isLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background">
+        <div className="text-muted-foreground">Loading...</div>
+      </div>
+    );
+  }
+
+  // Don't render layout if not authenticated
+  if (!session?.user) {
+    return null;
+  }
+
   return (
     <div className="flex h-screen bg-background">
       {/* Sidebar */}
@@ -29,8 +64,33 @@ function RootLayout() {
           </ul>
         </nav>
 
-        <div className="p-4 border-t border-border text-xs text-muted-foreground">
-          <p>DXD Internal Tool</p>
+        {/* User info and sign out */}
+        <div className="p-4 border-t border-border">
+          <div className="flex items-center gap-3 mb-3">
+            {session.user.image && (
+              <img
+                src={session.user.image}
+                alt={session.user.name || "User"}
+                className="w-8 h-8 rounded-full"
+              />
+            )}
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-foreground truncate">
+                {session.user.name || session.user.email}
+              </p>
+              <p className="text-xs text-muted-foreground truncate">
+                {session.user.email}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => signOut.mutate()}
+            disabled={signOut.isPending}
+            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent rounded-md transition-colors"
+          >
+            <LogOut size={16} />
+            {signOut.isPending ? "Signing out..." : "Sign out"}
+          </button>
         </div>
       </aside>
 

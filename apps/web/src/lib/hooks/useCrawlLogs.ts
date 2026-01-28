@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { API_URL } from "../api";
 
 export interface CrawlLogEvent {
   level: string;
@@ -35,7 +36,9 @@ export function useCrawlLogs(crawlId: string | null): UseCrawlLogsResult {
       return;
     }
 
-    const eventSource = new EventSource(`/api/sse/crawls/${crawlId}`);
+    const eventSource = new EventSource(`${API_URL}/api/sse/crawls/${crawlId}`, {
+      withCredentials: true,
+    });
 
     eventSource.onopen = () => {
       setConnected(true);

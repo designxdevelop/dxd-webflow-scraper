@@ -6,7 +6,7 @@ compatibility_flags = ["nodejs_compat"]
 # R2 bucket binding — same bucket the worker writes to via S3-compatible API
 [[r2_buckets]]
 binding = "STORAGE_BUCKET"
-bucket_name = "dxd-storage"
+bucket_name = "dxd-site-scraper"
 
 # Hyperdrive — connection pooler/proxy to Railway PostgreSQL
 [[hyperdrive]]

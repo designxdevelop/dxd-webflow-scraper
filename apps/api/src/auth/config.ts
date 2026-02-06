@@ -10,7 +10,6 @@ const ALLOWED_DOMAIN = "designxdevelop.com";
 export function getAuthConfig(): AuthConfig {
   const isProduction = process.env.NODE_ENV === "production";
   const frontendUrl = (process.env.FRONTEND_URL || "https://archiver.designxdevelop.com").replace(/\/+$/, "");
-  const frontendLoginUrl = `${frontendUrl}/login`;
 
   return {
     basePath: "/api/auth",
@@ -86,8 +85,8 @@ export function getAuthConfig(): AuthConfig {
       },
     },
     pages: {
-      signIn: frontendLoginUrl,
-      error: frontendLoginUrl,
+      signIn: "/login",
+      error: "/login",
     },
     // API and web are on different Railway subdomains in production.
     // Cross-site requests require SameSite=None + Secure cookies.

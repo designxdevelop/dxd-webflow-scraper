@@ -12,6 +12,10 @@ import { sseRoutes } from "./routes/sse.js";
 import { previewRoutes } from "./routes/preview.js";
 
 const app = new Hono<{ Variables: AuthVariables }>();
+const frontendUrl = (process.env.FRONTEND_URL || "https://archiver.designxdevelop.com")
+  .replace(/^https\/\//, "https://")
+  .replace(/^http\/\//, "http://")
+  .replace(/\/+$/, "");
 
 // Initialize Auth.js config
 app.use("*", initAuthConfig(getAuthConfig));
@@ -39,6 +43,12 @@ app.use(
 
 // Health check (public)
 app.get("/health", (c) => c.json({ status: "ok", timestamp: new Date().toISOString() }));
+
+// Forward auth page redirects to the web app.
+app.get("/login", (c) => {
+  const search = new URL(c.req.url).search;
+  return c.redirect(`${frontendUrl}/login${search}`);
+});
 
 // Auth routes (public) - handles /api/auth/*
 app.use("/api/auth/*", authHandler());

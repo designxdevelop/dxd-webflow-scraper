@@ -9,6 +9,10 @@
   "scripts": {
     "dev": "turbo dev",
     "build": "turbo build",
+    "start": "bun run start:api",
+    "start:api": "bun run --filter @dxd/api start",
+    "start:web": "bun run --filter @dxd/web start",
+    "start:worker": "bun run --filter @dxd/worker start",
     "lint": "turbo lint",
     "db:generate": "turbo db:generate --filter=@dxd/api",
     "db:migrate": "turbo db:migrate --filter=@dxd/api",

@@ -9,6 +9,7 @@ const ALLOWED_DOMAIN = "designxdevelop.com";
 
 export function getAuthConfig(): AuthConfig {
   return {
+    basePath: "/api/auth",
     adapter: DrizzleAdapter(db, {
       usersTable: users,
       accountsTable: accounts,

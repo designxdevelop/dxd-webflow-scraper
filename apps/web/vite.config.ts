@@ -4,6 +4,13 @@ import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 
+const previewAllowedHosts = [
+  "localhost",
+  "127.0.0.1",
+  ".up.railway.app",
+  process.env.RAILWAY_PUBLIC_DOMAIN,
+].filter((host): host is string => Boolean(host));
+
 export default defineConfig({
   plugins: [
     tanstackRouter({
@@ -30,5 +37,8 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+  },
+  preview: {
+    allowedHosts: previewAllowedHosts,
   },
 });

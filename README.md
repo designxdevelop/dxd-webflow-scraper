@@ -72,6 +72,20 @@ cd apps/api && bun run db:push
 bunx playwright install chromium
 ```
 
+6. Configure GitHub OAuth (required for dashboard login):
+
+- Create a GitHub OAuth App in your org/account settings.
+- Set `Authorization callback URL` to:
+  - Local: `http://localhost:3001/api/auth/callback/github`
+  - Production: `https://<your-api-domain>/api/auth/callback/github`
+- Add these env vars for the API service:
+  - `GITHUB_CLIENT_ID`
+  - `GITHUB_CLIENT_SECRET`
+  - `AUTH_SECRET` (random high-entropy string)
+  - `FRONTEND_URL` (for redirects, e.g. `http://localhost:5173` or your web app domain)
+- Add this env var for the web app:
+  - `VITE_API_URL` (e.g. `http://localhost:3001` locally)
+
 ### Development
 
 Run all services in parallel:

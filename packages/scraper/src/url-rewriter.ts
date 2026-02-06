@@ -359,25 +359,34 @@ async function processCodeIslands($: CheerioAPI, pageUrl: string, assets: AssetD
 }
 
 async function mirrorFederatedModule(clientModuleUrl: string, assets: AssetDownloader): Promise<string> {
-  const { moduleBaseDir, modulePublicPath, loaderFileName } = getModulePaths(clientModuleUrl);
+  const normalizedClientModuleUrl = normalizeUrlPath(clientModuleUrl);
+  const { moduleBaseDir, modulePublicPath, loaderFileName } = getModulePaths(normalizedClientModuleUrl);
   const localLoaderPath = path.posix.join(moduleBaseDir, loaderFileName);
 
-  const wfManifest = await fetchJson(clientModuleUrl);
+  const wfManifest = await fetchJson(normalizedClientModuleUrl);
   await assets.writeTextAssetAtPath(localLoaderPath, JSON.stringify(wfManifest));
 
   const entryRef = asString(wfManifest.entry) || "mf-manifest.json";
-  const entryUrl = new URL(entryRef, clientModuleUrl).toString();
+  const entryUrl = new URL(entryRef, normalizedClientModuleUrl).toString();
   const entryFileName = getUrlFileName(entryUrl, "mf-manifest.json");
   const localEntryPath = path.posix.join(moduleBaseDir, entryFileName);
 
   const mfManifest = await fetchJson(entryUrl);
+  const remotePublicPath = getFederationRemotePublicPath(mfManifest, entryUrl);
   patchFederationManifestPublicPath(mfManifest, modulePublicPath);
 
   const assetRefs = collectFederationAssetRefs(mfManifest);
   for (const assetRef of assetRefs) {
-    const absoluteAssetUrl = new URL(assetRef, entryUrl).toString();
+    const absoluteAssetUrl = new URL(assetRef, remotePublicPath).toString();
     const localAssetPath = getLocalFederationAssetPath(moduleBaseDir, assetRef, absoluteAssetUrl);
-    await assets.downloadAssetToPath(absoluteAssetUrl, localAssetPath);
+    try {
+      await assets.downloadAssetToPath(absoluteAssetUrl, localAssetPath);
+    } catch (error) {
+      log.warn(
+        `Failed to mirror federation asset ${absoluteAssetUrl}: ${(error as Error).message}`,
+        absoluteAssetUrl
+      );
+    }
   }
 
   await assets.writeTextAssetAtPath(localEntryPath, JSON.stringify(mfManifest));
@@ -436,6 +445,24 @@ function patchFederationManifestPublicPath(manifest: Record<string, unknown>, lo
   }
 }
 
+function getFederationRemotePublicPath(
+  manifest: Record<string, unknown>,
+  fallbackUrl: string
+): string {
+  const metaData = asRecord(manifest.metaData);
+  const rawPublicPath = asString(metaData?.publicPath);
+  if (!rawPublicPath) {
+    return fallbackUrl;
+  }
+
+  try {
+    const absolute = new URL(rawPublicPath, fallbackUrl).toString();
+    return normalizeUrlPath(absolute);
+  } catch {
+    return fallbackUrl;
+  }
+}
+
 function getLocalFederationAssetPath(
   moduleBaseDir: string,
   assetRef: string,
@@ -475,6 +502,12 @@ function getModulePaths(clientModuleUrl: string): {
 
   const modulePublicPath = `/${moduleBaseDir.replace(/\/+$/, "")}/`;
   return { moduleBaseDir, modulePublicPath, loaderFileName };
+}
+
+function normalizeUrlPath(url: string): string {
+  const parsed = new URL(url);
+  parsed.pathname = safeDecodeURIComponent(parsed.pathname);
+  return parsed.toString();
 }
 
 function getUrlFileName(url: string, fallback: string): string {

@@ -8,6 +8,8 @@ import { eq, or } from "drizzle-orm";
 const ALLOWED_DOMAIN = "designxdevelop.com";
 
 export function getAuthConfig(): AuthConfig {
+  const isProduction = process.env.NODE_ENV === "production";
+
   return {
     basePath: "/api/auth",
     adapter: DrizzleAdapter(db, {
@@ -88,6 +90,21 @@ export function getAuthConfig(): AuthConfig {
       signIn: "/login",
       error: "/login",
     },
+    // API and web are on different Railway subdomains in production.
+    // Cross-site requests require SameSite=None + Secure cookies.
+    cookies: isProduction
+      ? {
+          sessionToken: {
+            options: { sameSite: "none", secure: true },
+          },
+          callbackUrl: {
+            options: { sameSite: "none", secure: true },
+          },
+          csrfToken: {
+            options: { sameSite: "none", secure: true },
+          },
+        }
+      : undefined,
     trustHost: true,
     secret: process.env.AUTH_SECRET,
   };

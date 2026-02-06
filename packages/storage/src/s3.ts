@@ -1,6 +1,9 @@
 import path from "node:path";
+import fs from "node:fs";
 import fsp from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import {
   S3Client,
   GetObjectCommand,
@@ -51,13 +54,27 @@ export class S3Storage implements StorageAdapter {
   }
 
   async writeStream(filePath: string, stream: ReadableStream<Uint8Array>): Promise<void> {
-    await this.client.send(
-      new PutObjectCommand({
-        Bucket: this.config.bucket,
-        Key: filePath,
-        Body: Readable.fromWeb(stream as any),
-      })
-    );
+    const uploadTempDir = path.join(this.tempRoot, ".stream-uploads");
+    await fsp.mkdir(uploadTempDir, { recursive: true });
+
+    const tempFilePath = path.join(uploadTempDir, `${randomUUID()}.upload`);
+
+    try {
+      // Spool the Web stream to disk first so S3 upload has a deterministic content length.
+      await pipeline(Readable.fromWeb(stream as any), fs.createWriteStream(tempFilePath));
+      const stat = await fsp.stat(tempFilePath);
+
+      await this.client.send(
+        new PutObjectCommand({
+          Bucket: this.config.bucket,
+          Key: filePath,
+          Body: fs.createReadStream(tempFilePath),
+          ContentLength: stat.size,
+        })
+      );
+    } finally {
+      await fsp.unlink(tempFilePath).catch(() => undefined);
+    }
   }
 
   async readFile(filePath: string): Promise<Buffer> {

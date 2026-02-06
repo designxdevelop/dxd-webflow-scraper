@@ -12,11 +12,24 @@ interface PageProcessorOptions {
   outputDir: string;
   assets: AssetDownloader;
   removeWebflowBadge?: boolean;
+  signal?: AbortSignal;
+  shouldAbort?: () => boolean | Promise<boolean>;
   onProgress?: (progress: Partial<CrawlProgress>) => void | Promise<void>;
 }
 
 export async function processPage(options: PageProcessorOptions): Promise<string> {
-  const { url, browser, outputDir, assets, removeWebflowBadge = true } = options;
+  const { url, browser, outputDir, assets, removeWebflowBadge = true, signal, shouldAbort } = options;
+
+  async function assertNotCancelled(): Promise<void> {
+    if (signal?.aborted) {
+      throw new Error("Crawl cancelled by request.");
+    }
+    if (shouldAbort && (await shouldAbort())) {
+      throw new Error("Crawl cancelled by request.");
+    }
+  }
+
+  await assertNotCancelled();
   const context = await browser.newContext();
   const page = await context.newPage();
   page.setDefaultNavigationTimeout(90000);
@@ -66,6 +79,7 @@ export async function processPage(options: PageProcessorOptions): Promise<string
   });
 
   try {
+    await assertNotCancelled();
     // Try networkidle first (best for capturing dynamic resources), but fall back to load if it times out
     try {
       await page.goto(url, { waitUntil: "networkidle", timeout: 30000 });
@@ -82,6 +96,7 @@ export async function processPage(options: PageProcessorOptions): Promise<string
       }
     }
 
+    await assertNotCancelled();
     // Always discover and download dynamic chunks (rspack/webpack) for complete archives
     await triggerDynamicChunkLoading(page, url, requestedResources, resourceCategories);
 
@@ -105,6 +120,7 @@ export async function processPage(options: PageProcessorOptions): Promise<string
     // Wait for all downloads to complete
     await Promise.all(downloadPromises);
 
+    await assertNotCancelled();
     const html = await page.content();
     const rewritten = await rewriteHtmlDocument({ html, pageUrl: url, assets, removeWebflowBadge });
     const relativePath = buildRelativeFilePath(url);

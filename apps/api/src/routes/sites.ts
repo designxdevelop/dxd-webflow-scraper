@@ -215,10 +215,16 @@ app.post("/:id/crawl", async (c) => {
     .returning();
 
   // Queue the job
-  await crawlQueue.add("crawl", {
-    siteId,
-    crawlId: crawl.id,
-  });
+  await crawlQueue.add(
+    "crawl",
+    {
+      siteId,
+      crawlId: crawl.id,
+    },
+    {
+      jobId: crawl.id,
+    }
+  );
 
   return c.json({ crawl }, 201);
 });

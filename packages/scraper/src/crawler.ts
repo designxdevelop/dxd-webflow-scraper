@@ -1,163 +1,223 @@
 import path from "node:path";
 import os from "node:os";
 import fs from "fs-extra";
-import pLimit from "p-limit";
 import { chromium, Browser } from "playwright";
 import { fetchSitemapUrls } from "./sitemap-parser.js";
 import { AssetDownloader } from "./asset-downloader.js";
 import { processPage } from "./page-processor.js";
 import { CrawlOptions, CrawlResult, CrawlState, CrawlProgress } from "./types.js";
-import { log, setLogCallback } from "./logger.js";
+import { log, runWithLogCallback } from "./logger.js";
 import { writeOutputConfig } from "./output-config.js";
 import {
   getStateFilePath,
   loadState,
-  saveState,
   updateStateProgress,
   filterUrlsForResume,
 } from "./state-manager.js";
 
+const CRAWL_ABORT_MESSAGE = "Crawl cancelled by request.";
+const STATE_FLUSH_BATCH_SIZE = 100;
+
+function readPositiveInt(envVar: string, fallback: number): number {
+  const raw = process.env[envVar];
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+async function shouldAbort(options: CrawlOptions): Promise<boolean> {
+  if (options.signal?.aborted) {
+    return true;
+  }
+  if (!options.shouldAbort) {
+    return false;
+  }
+  return await options.shouldAbort();
+}
+
+async function assertNotAborted(options: CrawlOptions): Promise<void> {
+  if (await shouldAbort(options)) {
+    throw new Error(CRAWL_ABORT_MESSAGE);
+  }
+}
+
+function isAbortError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return error.message.includes(CRAWL_ABORT_MESSAGE);
+}
+
 export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
-  const startedAt = Date.now();
-  const resolvedOutput = path.resolve(options.outputDir);
-  const statePath = getStateFilePath(resolvedOutput, options.stateFile);
+  return runWithLogCallback(options.onLog ?? null, async () => {
+    const startedAt = Date.now();
+    const resolvedOutput = path.resolve(options.outputDir);
+    const statePath = getStateFilePath(resolvedOutput, options.stateFile);
 
-  // Set up log callback if provided
-  if (options.onLog) {
-    setLogCallback(options.onLog);
-  }
+    await assertNotAborted(options);
 
-  // Load existing state if resuming
-  let state: CrawlState | null = null;
-  if (options.resume || options.retryFailed) {
-    state = await loadState(statePath);
-    if (state && state.baseUrl !== options.baseUrl) {
-      log.warn(`State file contains different baseUrl (${state.baseUrl}), ignoring state`);
-      state = null;
-    }
-  }
-
-  // Only empty directory if not resuming
-  if (!options.resume && !options.retryFailed) {
-    await fs.emptyDir(resolvedOutput);
-    // Clear state for fresh start
-    if (await fs.pathExists(statePath)) {
-      await fs.remove(statePath);
-    }
-  }
-
-  log.info(`Resolving sitemap for ${options.baseUrl}`);
-  const sitemapUrls = await fetchSitemapUrls(options.baseUrl);
-  if (!sitemapUrls.length) {
-    throw new Error("No URLs discovered from sitemap.");
-  }
-
-  // Filter URLs based on exclude patterns
-  let filteredUrls = sitemapUrls;
-  if (options.excludePatterns && options.excludePatterns.length > 0) {
-    const patterns = options.excludePatterns.map((p) => new RegExp(p));
-    filteredUrls = sitemapUrls.filter((url) => !patterns.some((pattern) => pattern.test(url)));
-    if (filteredUrls.length < sitemapUrls.length) {
-      log.info(`Excluded ${sitemapUrls.length - filteredUrls.length} URLs based on patterns`);
-    }
-  }
-
-  const allPages = options.maxPages ? filteredUrls.slice(0, options.maxPages) : filteredUrls;
-
-  // Filter URLs based on resume/retry options
-  const pages = filterUrlsForResume(allPages, state, options.resume ?? false, options.retryFailed ?? false);
-
-  if (pages.length === 0) {
-    log.info("No URLs to process (all already completed or no failed URLs to retry).");
-    return {
-      total: allPages.length,
-      succeeded: state?.succeeded.length ?? 0,
-      failed: state?.failed.length ?? 0,
-      durationMs: Date.now() - startedAt,
-    };
-  }
-
-  log.info(`Found ${pages.length} URLs to crawl (${allPages.length} total in sitemap).`);
-
-  // Initialize or update state
-  if (!state) {
-    state = {
-      baseUrl: options.baseUrl,
-      outputDir: resolvedOutput,
-      succeeded: [],
-      failed: [],
-      lastUpdated: Date.now(),
-    };
-  }
-
-  const assetDownloader = new AssetDownloader(resolvedOutput);
-  await assetDownloader.init();
-
-  // Calculate browser capacity based on system resources
-  // Each browser instance uses ~200-500MB RAM, so check available memory
-  const totalMemoryGB = os.totalmem() / 1024 ** 3;
-  const freeMemoryGB = os.freemem() / 1024 ** 3;
-  const cpuCount = os.cpus().length;
-
-  // Estimate: each browser instance needs ~300MB, leave 2GB for system
-  const maxBrowsersByMemory = Math.floor((freeMemoryGB - 2) / 0.3);
-  const maxBrowsersByCPU = cpuCount;
-
-  // Use multiple browser instances for better parallelism
-  // Each browser instance runs in its own process, utilizing multiple CPU cores
-  // Only use multiple browsers if concurrency is high enough to benefit
-  const desiredBrowsers = options.concurrency >= 4 ? Math.max(2, Math.ceil(options.concurrency / 3)) : 1;
-
-  // Cap by available resources (CPU and memory), ensure at least 1 browser
-  const numBrowsers = Math.max(1, Math.min(desiredBrowsers, maxBrowsersByCPU, Math.max(1, maxBrowsersByMemory)));
-
-  const concurrencyPerBrowser = Math.max(1, Math.ceil(options.concurrency / numBrowsers));
-
-  log.info(
-    `System capacity: ${cpuCount} CPUs, ${freeMemoryGB.toFixed(1)}GB free memory. ` +
-      `Launching ${numBrowsers} browser instance(s) with ${concurrencyPerBrowser} concurrent pages each`
-  );
-
-  const browsers: Browser[] = [];
-  let succeededUrls: string[] = [];
-  let failedUrls: string[] = [];
-
-  try {
-    // Launch all browser instances
-    for (let i = 0; i < numBrowsers; i++) {
-      browsers.push(await chromium.launch({ headless: true }));
+    // Load existing state if resuming
+    let state: CrawlState | null = null;
+    if (options.resume || options.retryFailed) {
+      state = await loadState(statePath);
+      if (state && state.baseUrl !== options.baseUrl) {
+        log.warn(`State file contains different baseUrl (${state.baseUrl}), ignoring state`);
+        state = null;
+      }
     }
 
-    // Distribute pages across browser instances using round-robin
-    const browserQueues: string[][] = Array.from({ length: numBrowsers }, () => []);
-    pages.forEach((url, index) => {
-      browserQueues[index % numBrowsers].push(url);
-    });
+    // Only empty directory if not resuming
+    if (!options.resume && !options.retryFailed) {
+      await fs.emptyDir(resolvedOutput);
+      if (await fs.pathExists(statePath)) {
+        await fs.remove(statePath);
+      }
+    }
 
+    await assertNotAborted(options);
+    log.info(`Resolving sitemap for ${options.baseUrl}`);
+    const sitemapUrls = await fetchSitemapUrls(options.baseUrl);
+    if (!sitemapUrls.length) {
+      throw new Error("No URLs discovered from sitemap.");
+    }
+
+    // Filter URLs based on exclude patterns
+    let filteredUrls = sitemapUrls;
+    if (options.excludePatterns && options.excludePatterns.length > 0) {
+      const patterns = options.excludePatterns.map((p) => new RegExp(p));
+      filteredUrls = sitemapUrls.filter((url) => !patterns.some((pattern) => pattern.test(url)));
+      if (filteredUrls.length < sitemapUrls.length) {
+        log.info(`Excluded ${sitemapUrls.length - filteredUrls.length} URLs based on patterns`);
+      }
+    }
+
+    const allPages = options.maxPages ? filteredUrls.slice(0, options.maxPages) : filteredUrls;
+    const pages = filterUrlsForResume(
+      allPages,
+      state,
+      options.resume ?? false,
+      options.retryFailed ?? false
+    );
+
+    if (pages.length === 0) {
+      log.info("No URLs to process (all already completed or no failed URLs to retry).");
+      return {
+        total: allPages.length,
+        succeeded: state?.succeeded.length ?? 0,
+        failed: state?.failed.length ?? 0,
+        durationMs: Date.now() - startedAt,
+      };
+    }
+
+    log.info(`Found ${pages.length} URLs to crawl (${allPages.length} total in sitemap).`);
+
+    if (!state) {
+      state = {
+        baseUrl: options.baseUrl,
+        outputDir: resolvedOutput,
+        succeeded: [],
+        failed: [],
+        lastUpdated: Date.now(),
+      };
+    }
+
+    const assetDownloader = new AssetDownloader(resolvedOutput);
+    await assetDownloader.init();
+
+    const freeMemoryGB = os.freemem() / 1024 ** 3;
+    const cpuCount = os.cpus().length;
+    const configuredMaxConcurrency = readPositiveInt("MAX_CRAWL_CONCURRENCY", 10);
+    const requestedConcurrency = Math.max(1, options.concurrency);
+    const maxConcurrencyByMemory = Math.max(1, Math.floor(Math.max(0.5, freeMemoryGB - 1.5) / 0.25));
+    const effectiveConcurrency = Math.max(
+      1,
+      Math.min(requestedConcurrency, configuredMaxConcurrency, cpuCount * 2, maxConcurrencyByMemory)
+    );
+
+    if (effectiveConcurrency < requestedConcurrency) {
+      log.warn(
+        `Crawl concurrency reduced from ${requestedConcurrency} to ${effectiveConcurrency} for stability`
+      );
+    }
+
+    const maxBrowsersByMemory = Math.max(1, Math.floor(Math.max(0.5, freeMemoryGB - 1.5) / 0.35));
+    const maxBrowsersByCPU = Math.max(1, Math.floor(cpuCount));
+    const desiredBrowsers =
+      effectiveConcurrency >= 4 ? Math.max(2, Math.ceil(effectiveConcurrency / 3)) : 1;
+    const numBrowsers = Math.max(
+      1,
+      Math.min(desiredBrowsers, maxBrowsersByCPU, maxBrowsersByMemory)
+    );
+    const concurrencyPerBrowser = Math.max(1, Math.ceil(effectiveConcurrency / numBrowsers));
+
+    log.info(
+      `System capacity: ${cpuCount} CPUs, ${freeMemoryGB.toFixed(1)}GB free memory. ` +
+        `Launching ${numBrowsers} browser instance(s) with ${concurrencyPerBrowser} concurrent pages each`
+    );
+
+    const browsers: Browser[] = [];
+    const pendingSucceeded: string[] = [];
+    const pendingFailed: string[] = [];
     let processed = 0;
-    const urlResults: Array<{ url: string; success: boolean; relativePath?: string; error?: string }> = [];
+    let succeededCount = state.succeeded.length;
+    let failedCount = state.failed.length;
 
-    // Process each browser's queue in parallel
-    await Promise.all(
-      browsers.map((browser, browserIndex) => {
-        const queue = browserQueues[browserIndex];
-        const limit = pLimit(concurrencyPerBrowser);
+    const flushStateProgress = async (force: boolean): Promise<void> => {
+      if (!force && pendingSucceeded.length + pendingFailed.length < STATE_FLUSH_BATCH_SIZE) {
+        return;
+      }
+      if (pendingSucceeded.length === 0 && pendingFailed.length === 0) {
+        return;
+      }
+      const succeededBatch = pendingSucceeded.splice(0, pendingSucceeded.length);
+      const failedBatch = pendingFailed.splice(0, pendingFailed.length);
+      await updateStateProgress(statePath, state!, succeededBatch, failedBatch);
+    };
 
-        return Promise.all(
-          queue.map((url) =>
-            limit(async () => {
-              const position = ++processed;
-              
-              // Report progress
-              if (options.onProgress) {
-                const progress: CrawlProgress = {
-                  total: pages.length,
-                  succeeded: urlResults.filter((r) => r.success).length,
-                  failed: urlResults.filter((r) => !r.success).length,
-                  currentUrl: url,
-                };
-                await options.onProgress(progress);
+    const reportProgress = async (currentUrl?: string): Promise<void> => {
+      if (!options.onProgress) {
+        return;
+      }
+      const progress: CrawlProgress = {
+        total: allPages.length,
+        succeeded: succeededCount,
+        failed: failedCount,
+        currentUrl,
+      };
+      await options.onProgress(progress);
+    };
+
+    try {
+      for (let i = 0; i < numBrowsers; i++) {
+        await assertNotAborted(options);
+        browsers.push(await chromium.launch({ headless: true }));
+      }
+
+      const browserQueues: string[][] = Array.from({ length: numBrowsers }, () => []);
+      pages.forEach((url, index) => {
+        browserQueues[index % numBrowsers].push(url);
+      });
+
+      await Promise.all(
+        browsers.map(async (browser, browserIndex) => {
+          const queue = browserQueues[browserIndex];
+          let nextIndex = 0;
+          const workerCount = Math.max(1, Math.min(concurrencyPerBrowser, queue.length));
+
+          const workers = Array.from({ length: workerCount }, async () => {
+            while (true) {
+              await assertNotAborted(options);
+
+              const queueIndex = nextIndex++;
+              if (queueIndex >= queue.length) {
+                return;
               }
+
+              const url = queue[queueIndex];
+              const position = ++processed;
+              await reportProgress(url);
 
               try {
                 const relativePath = await processPage({
@@ -166,54 +226,54 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
                   outputDir: resolvedOutput,
                   assets: assetDownloader,
                   removeWebflowBadge: options.removeWebflowBadge ?? true,
+                  shouldAbort: options.shouldAbort,
+                  signal: options.signal,
                 });
-                urlResults.push({ url, success: true, relativePath });
-                log.info(`(${position}/${pages.length}) Archived ${url} -> ${relativePath}`, url);
+
+                succeededCount += 1;
+                pendingSucceeded.push(url);
+
+                if (position % 25 === 0 || position === pages.length) {
+                  log.info(
+                    `Progress: ${position}/${pages.length} processed (${succeededCount} succeeded, ${failedCount} failed)`
+                  );
+                } else {
+                  log.debug(`Archived ${url} -> ${relativePath}`, url);
+                }
               } catch (error) {
-                urlResults.push({ url, success: false, error: (error as Error).message });
+                if (isAbortError(error)) {
+                  throw error;
+                }
+                failedCount += 1;
+                pendingFailed.push(url);
                 log.error(`(${position}/${pages.length}) Failed ${url}: ${(error as Error).message}`, url);
               }
-            })
-          )
-        );
-      })
-    );
 
-    // Collect results
-    succeededUrls = urlResults.filter((r) => r.success).map((r) => r.url!);
-    failedUrls = urlResults.filter((r) => !r.success).map((r) => r.url!);
-  } finally {
-    // Close all browser instances
-    await Promise.all(browsers.map((browser) => browser.close()));
-    
-    // Clear log callback
-    setLogCallback(null);
-  }
+              await flushStateProgress(false);
+            }
+          });
 
-  // Update state with progress
-  if (succeededUrls.length > 0 || failedUrls.length > 0) {
-    await updateStateProgress(statePath, state, succeededUrls, failedUrls);
-  }
+          await Promise.all(workers);
+        })
+      );
+    } finally {
+      await Promise.all(
+        browsers.map(async (browser) => {
+          await browser.close().catch(() => undefined);
+        })
+      );
+    }
 
-  // Write output config (vercel.json by default)
-  await writeOutputConfig(resolvedOutput, options.redirectsCsv);
+    await assertNotAborted(options);
+    await flushStateProgress(true);
+    await writeOutputConfig(resolvedOutput, options.redirectsCsv);
+    await reportProgress();
 
-  const totalSucceeded = state.succeeded.length;
-  const totalFailed = state.failed.length;
-
-  // Final progress report
-  if (options.onProgress) {
-    await options.onProgress({
+    return {
       total: allPages.length,
-      succeeded: totalSucceeded,
-      failed: totalFailed,
-    });
-  }
-
-  return {
-    total: allPages.length,
-    succeeded: totalSucceeded,
-    failed: totalFailed,
-    durationMs: Date.now() - startedAt,
-  };
+      succeeded: succeededCount,
+      failed: failedCount,
+      durationMs: Date.now() - startedAt,
+    };
+  });
 }

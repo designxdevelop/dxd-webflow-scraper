@@ -49,6 +49,8 @@ export interface CrawlOptions {
   retryFailed?: boolean;
   stateFile?: string;
   redirectsCsv?: string;
+  signal?: AbortSignal;
+  shouldAbort?: () => boolean | Promise<boolean>;
   onProgress?: (progress: CrawlProgress) => void | Promise<void>;
   onLog?: (level: LogLevel, message: string, url?: string) => void | Promise<void>;
 }

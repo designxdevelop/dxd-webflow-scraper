@@ -15,7 +15,7 @@ const schedulerLockKey = "scheduler:crawl-check";
 
 async function acquireSchedulerLock(): Promise<boolean> {
   try {
-    const result = await redis.set(schedulerLockKey, Date.now().toString(), "NX", "EX", 55);
+    const result = await redis.set(schedulerLockKey, Date.now().toString(), "EX", 55, "NX");
     return result === "OK";
   } catch {
     return false;
@@ -65,10 +65,16 @@ async function checkScheduledCrawls() {
         .returning();
 
       // Queue the job
-      await crawlQueue.add("crawl", {
-        siteId: site.id,
-        crawlId: crawl.id,
-      });
+      await crawlQueue.add(
+        "crawl",
+        {
+          siteId: site.id,
+          crawlId: crawl.id,
+        },
+        {
+          jobId: crawl.id,
+        }
+      );
 
       // Calculate next run time
       if (site.scheduleCron) {

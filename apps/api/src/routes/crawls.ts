@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { eq, desc, and } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { crawls, crawlLogs, sites } from "../db/schema.js";
+import { crawlQueue } from "../queue/client.js";
 import { getStorage } from "@dxd/storage";
 import archiver from "archiver";
 import { Readable } from "node:stream";
@@ -86,8 +87,16 @@ app.post("/:id/cancel", async (c) => {
     return c.json({ error: "Crawl not found" }, 404);
   }
 
-  if (crawl.status !== "pending" && crawl.status !== "running") {
+  if (crawl.status !== "pending" && crawl.status !== "running" && crawl.status !== "uploading") {
     return c.json({ error: "Crawl cannot be cancelled" }, 400);
+  }
+
+  if (crawl.status === "pending") {
+    try {
+      await crawlQueue.remove(id);
+    } catch {
+      // If the job no longer exists, the DB status update below still makes cancellation idempotent.
+    }
   }
 
   const [updated] = await db
@@ -95,6 +104,7 @@ app.post("/:id/cancel", async (c) => {
     .set({
       status: "cancelled",
       completedAt: new Date(),
+      errorMessage: "Cancelled by user",
     })
     .where(eq(crawls.id, id))
     .returning();

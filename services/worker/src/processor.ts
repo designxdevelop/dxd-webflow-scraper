@@ -1,6 +1,6 @@
-import { Worker, Job } from "bullmq";
+import { Worker, Job, Queue, UnrecoverableError } from "bullmq";
 import Redis from "ioredis";
-import { eq } from "drizzle-orm";
+import { eq, and, inArray, lte } from "drizzle-orm";
 import { crawlSite, type CrawlProgress, type LogLevel } from "@dxd/scraper";
 import { getStorage } from "@dxd/storage";
 import { db, sites, crawls, crawlLogs } from "./db.js";
@@ -14,9 +14,13 @@ const storage = getStorage();
 // Redis for pub/sub
 const pubClient = new Redis(redisUrl);
 
-// Redis connection for worker
+// Redis connection for worker + queue inspection
 const workerConnection = new Redis(redisUrl, {
   maxRetriesPerRequest: null,
+});
+
+const crawlQueue = new Queue<CrawlJobData>("crawl-jobs", {
+  connection: workerConnection,
 });
 
 interface CrawlJobData {
@@ -24,8 +28,36 @@ interface CrawlJobData {
   crawlId: string;
 }
 
+class CrawlCancelledError extends Error {
+  constructor(message = "Crawl cancelled by user") {
+    super(message);
+    this.name = "CrawlCancelledError";
+  }
+}
+
+class CrawlTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CrawlTimeoutError";
+  }
+}
+
 function getArchivePath(outputPath: string): string {
   return `${outputPath}.zip`;
+}
+
+function parsePositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+
+  return parsed;
 }
 
 async function createPrebuiltArchive(crawlId: string, outputPath: string): Promise<string> {
@@ -39,7 +71,7 @@ async function createPrebuiltArchive(crawlId: string, outputPath: string): Promi
 
   const archive = archiver("zip", { zlib: { level: 9 } });
 
-  archive.on("warning", (error) => {
+  archive.on("warning", (error: Error) => {
     console.warn("[Worker] Archive warning", {
       crawlId,
       outputPath,
@@ -47,7 +79,7 @@ async function createPrebuiltArchive(crawlId: string, outputPath: string): Promi
     });
   });
 
-  archive.on("error", (error) => {
+  archive.on("error", (error: Error) => {
     console.error("[Worker] Archive error", {
       crawlId,
       outputPath,
@@ -56,7 +88,10 @@ async function createPrebuiltArchive(crawlId: string, outputPath: string): Promi
   });
 
   const archiveStream = Readable.toWeb(archive) as ReadableStream<Uint8Array>;
-  const writePromise = storage.writeStream(archivePath, archiveStream);
+  let writeError: unknown;
+  const writePromise = storage.writeStream(archivePath, archiveStream).catch((error) => {
+    writeError = error;
+  });
 
   try {
     for (const file of files) {
@@ -67,6 +102,9 @@ async function createPrebuiltArchive(crawlId: string, outputPath: string): Promi
 
     await archive.finalize();
     await writePromise;
+    if (writeError) {
+      throw writeError;
+    }
     return archivePath;
   } catch (error) {
     await storage.deleteDir(archivePath).catch(() => undefined);
@@ -84,19 +122,31 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
 
   console.log(`[Worker] Starting crawl job: ${crawlId} for site: ${siteId}`);
 
-  // Get site config
   const site = await db.query.sites.findFirst({
     where: eq(sites.id, siteId),
   });
 
   if (!site) {
-    throw new Error(`Site not found: ${siteId}`);
+    throw new UnrecoverableError(`Site not found: ${siteId}`);
+  }
+
+  const crawl = await db.query.crawls.findFirst({
+    where: eq(crawls.id, crawlId),
+  });
+
+  if (!crawl) {
+    throw new UnrecoverableError(`Crawl not found: ${crawlId}`);
+  }
+
+  if (crawl.status === "cancelled") {
+    console.log(`[Worker] Skipping cancelled crawl ${crawlId}`);
+    return;
   }
 
   // Update status to running
   await db
     .update(crawls)
-    .set({ status: "running", startedAt: new Date() })
+    .set({ status: "running", startedAt: crawl.startedAt ?? new Date(), errorMessage: null })
     .where(eq(crawls.id, crawlId));
 
   await publishEvent(crawlId, {
@@ -106,6 +156,61 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
     timestamp: new Date().toISOString(),
   });
 
+  const maxDurationMs = parsePositiveIntEnv("CRAWL_MAX_DURATION_MS", 45 * 60 * 1000);
+  const progressPersistIntervalMs = parsePositiveIntEnv("CRAWL_PROGRESS_PERSIST_INTERVAL_MS", 1500);
+  const statusCheckIntervalMs = parsePositiveIntEnv("CRAWL_STATUS_CHECK_INTERVAL_MS", 3000);
+  const maxSiteConcurrency = parsePositiveIntEnv("MAX_SITE_CONCURRENCY", 8);
+  const crawlConcurrency = Math.max(1, Math.min(site.concurrency ?? 5, maxSiteConcurrency));
+
+  if ((site.concurrency ?? 5) > crawlConcurrency) {
+    await publishEvent(crawlId, {
+      type: "log",
+      level: "warn",
+      message: `Site concurrency capped at ${crawlConcurrency} for worker stability`,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  let lastProgressPersistAt = 0;
+  let lastStatusCheckAt = 0;
+  let cancelled = false;
+
+  const timeoutController = new AbortController();
+  const timeoutId = setTimeout(() => {
+    timeoutController.abort();
+  }, maxDurationMs);
+
+  const assertCrawlIsActive = async (force = false): Promise<void> => {
+    if (timeoutController.signal.aborted) {
+      throw new CrawlTimeoutError(
+        `Crawl exceeded max duration of ${Math.round(maxDurationMs / 60000)} minutes`
+      );
+    }
+
+    if (cancelled) {
+      throw new CrawlCancelledError();
+    }
+
+    const now = Date.now();
+    if (!force && now - lastStatusCheckAt < statusCheckIntervalMs) {
+      return;
+    }
+
+    lastStatusCheckAt = now;
+    const latest = await db.query.crawls.findFirst({
+      where: eq(crawls.id, crawlId),
+    });
+
+    if (!latest) {
+      throw new CrawlCancelledError("Crawl record deleted while processing");
+    }
+
+    if (latest.status === "cancelled") {
+      cancelled = true;
+      throw new CrawlCancelledError();
+    }
+  };
+
   // Create output directory
   const outputDir = await storage.createTempDir(crawlId);
 
@@ -113,32 +218,52 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
     const result = await crawlSite({
       baseUrl: site.url,
       outputDir,
-      concurrency: site.concurrency ?? 5,
+      concurrency: crawlConcurrency,
       maxPages: site.maxPages ?? undefined,
       excludePatterns: site.excludePatterns ?? undefined,
       removeWebflowBadge: site.removeWebflowBadge ?? true,
       redirectsCsv: site.redirectsCsv ?? undefined,
+      shouldAbort: async () => {
+        try {
+          await assertCrawlIsActive();
+          return false;
+        } catch (error) {
+          if (error instanceof CrawlCancelledError || error instanceof CrawlTimeoutError) {
+            return true;
+          }
+          throw error;
+        }
+      },
 
       onProgress: async (progress: CrawlProgress) => {
-        // Publish to Redis for SSE
         await publishEvent(crawlId, {
           type: "progress",
           ...progress,
         });
 
-        // Update database
-        await db
-          .update(crawls)
-          .set({
-            totalPages: progress.total,
-            succeededPages: progress.succeeded,
-            failedPages: progress.failed,
-          })
-          .where(eq(crawls.id, crawlId));
+        const now = Date.now();
+        const isFinalProgress = !progress.currentUrl;
+        if (isFinalProgress || now - lastProgressPersistAt >= progressPersistIntervalMs) {
+          lastProgressPersistAt = now;
+          await db
+            .update(crawls)
+            .set({
+              totalPages: progress.total,
+              succeededPages: progress.succeeded,
+              failedPages: progress.failed,
+            })
+            .where(eq(crawls.id, crawlId));
+        }
+
+        await assertCrawlIsActive();
       },
 
       onLog: async (level: LogLevel, message: string, url?: string) => {
-        // Publish to Redis for SSE
+        // Ignore debug logs to avoid DB write amplification on large crawls.
+        if (level === "debug") {
+          return;
+        }
+
         await publishEvent(crawlId, {
           type: "log",
           level,
@@ -147,7 +272,6 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
           timestamp: new Date().toISOString(),
         });
 
-        // Store in database
         await db.insert(crawlLogs).values({
           crawlId,
           level,
@@ -156,6 +280,8 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
         });
       },
     });
+
+    await assertCrawlIsActive(true);
 
     await db
       .update(crawls)
@@ -169,10 +295,10 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
       timestamp: new Date().toISOString(),
     });
 
-    // Move output to permanent storage
+    await assertCrawlIsActive();
     const finalPath = await storage.moveToFinal(outputDir, crawlId);
 
-    // Calculate output size
+    await assertCrawlIsActive();
     const outputSize = await storage.getSize(finalPath);
 
     await publishEvent(crawlId, {
@@ -194,7 +320,8 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
       });
     }
 
-    // Update crawl as completed
+    await assertCrawlIsActive(true);
+
     await db
       .update(crawls)
       .set({
@@ -205,6 +332,7 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
         totalPages: result.total,
         succeededPages: result.succeeded,
         failedPages: result.failed,
+        errorMessage: null,
       })
       .where(eq(crawls.id, crawlId));
 
@@ -221,55 +349,140 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
   } catch (error) {
     console.error(`[Worker] Crawl failed: ${crawlId}`, error);
 
+    const isCancelled = error instanceof CrawlCancelledError;
+    const status = isCancelled ? "cancelled" : "failed";
+    const errorMessage = (error as Error).message;
+
     await db
       .update(crawls)
       .set({
-        status: "failed",
+        status,
         completedAt: new Date(),
-        errorMessage: (error as Error).message,
+        errorMessage,
       })
       .where(eq(crawls.id, crawlId));
 
     await publishEvent(crawlId, {
       type: "log",
-      level: "error",
-      message: `Crawl failed: ${(error as Error).message}`,
+      level: isCancelled ? "warn" : "error",
+      message: isCancelled ? `Crawl cancelled: ${errorMessage}` : `Crawl failed: ${errorMessage}`,
       timestamp: new Date().toISOString(),
     });
 
-    // Clean up temp directory on failure
     try {
       await fs.rm(outputDir, { recursive: true, force: true });
     } catch {
       // Ignore cleanup errors
     }
 
+    if (isCancelled) {
+      return;
+    }
+
+    if (error instanceof CrawlTimeoutError) {
+      throw new UnrecoverableError(error.message);
+    }
+
     throw error;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
+async function reconcileOrphanedCrawls(): Promise<void> {
+  const orphanGraceMs = parsePositiveIntEnv("ORPHAN_CRAWL_GRACE_MS", 5 * 60 * 1000);
+  const cutoff = new Date(Date.now() - orphanGraceMs);
+
+  const possiblyOrphaned = await db.query.crawls.findMany({
+    where: and(
+      inArray(crawls.status, ["pending", "running", "uploading"]),
+      lte(crawls.createdAt, cutoff)
+    ),
+    limit: 50,
+  });
+
+  if (possiblyOrphaned.length === 0) {
+    return;
+  }
+
+  for (const crawl of possiblyOrphaned) {
+    const queueJob = await crawlQueue.getJob(crawl.id);
+    if (!queueJob) {
+      await db
+        .update(crawls)
+        .set({
+          status: "failed",
+          completedAt: new Date(),
+          errorMessage:
+            "Crawl marked failed automatically: no queue job found for pending/running crawl.",
+        })
+        .where(eq(crawls.id, crawl.id));
+      continue;
+    }
+
+    const state = await queueJob.getState();
+    if (state === "active" || state === "waiting" || state === "delayed" || state === "prioritized") {
+      continue;
+    }
+
+    await db
+      .update(crawls)
+      .set({
+        status: "failed",
+        completedAt: new Date(),
+        errorMessage: `Crawl marked failed automatically: queue job state was ${state}.`,
+      })
+      .where(eq(crawls.id, crawl.id));
+  }
+}
 
 export function startWorker() {
+  const workerConcurrency = parsePositiveIntEnv("WORKER_CRAWL_CONCURRENCY", 2);
+  const lockDuration = parsePositiveIntEnv("WORKER_LOCK_DURATION_MS", 120000);
+  const stalledInterval = parsePositiveIntEnv("WORKER_STALLED_INTERVAL_MS", 60000);
+  const maxStalledCount = parsePositiveIntEnv("WORKER_MAX_STALLED_COUNT", 1);
+
   const worker = new Worker<CrawlJobData>("crawl-jobs", processCrawlJob, {
     connection: workerConnection,
-    concurrency: 2, // Process 2 crawls at a time
+    concurrency: workerConcurrency,
+    lockDuration,
+    stalledInterval,
+    maxStalledCount,
     removeOnComplete: { count: 100 },
     removeOnFail: { count: 100 },
   });
 
-  worker.on("completed", (job) => {
-    console.log(`[Worker] Job completed: ${job.id}`);
+  const reconcileIntervalMs = parsePositiveIntEnv("ORPHAN_CRAWL_RECONCILE_INTERVAL_MS", 120000);
+  void reconcileOrphanedCrawls().catch((error) => {
+    console.error("[Worker] Failed to reconcile orphaned crawls:", error);
   });
 
-  worker.on("failed", (job, error) => {
-    console.error(`[Worker] Job failed: ${job?.id}`, error.message);
+  const reconcileTimer = setInterval(() => {
+    void reconcileOrphanedCrawls().catch((error) => {
+      console.error("[Worker] Failed to reconcile orphaned crawls:", error);
+    });
+  }, reconcileIntervalMs);
+  reconcileTimer.unref();
+
+  worker.on("completed", (completedJob) => {
+    console.log(`[Worker] Job completed: ${completedJob.id}`);
+  });
+
+  worker.on("failed", (failedJob, error) => {
+    console.error(`[Worker] Job failed: ${failedJob?.id}`, error.message);
   });
 
   worker.on("error", (error) => {
     console.error("[Worker] Worker error:", error);
   });
 
-  console.log("[Worker] Started crawl job processor");
+  worker.on("closed", () => {
+    clearInterval(reconcileTimer);
+  });
+
+  console.log(
+    `[Worker] Started crawl job processor (concurrency=${workerConcurrency}, lockDuration=${lockDuration}ms)`
+  );
 
   return worker;
 }

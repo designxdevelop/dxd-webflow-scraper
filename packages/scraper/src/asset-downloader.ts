@@ -240,6 +240,7 @@ export class AssetDownloader {
 
       // Block known third-party tracking/analytics domains
       const blockedDomains = [
+        "termly.io",
         "googletagmanager.com",
         "google-analytics.com",
         "facebook.net",

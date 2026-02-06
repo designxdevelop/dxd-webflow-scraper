@@ -6,6 +6,14 @@ import { getStorage } from "@dxd/storage";
 import path from "node:path";
 
 const app = new Hono();
+const encodedClientModuleUrlPattern = new RegExp(
+  `(clientModuleUrl(?:&quot;|")\\s*:\\s*(?:&quot;|"))(\\/(?!\\/)[^"&<]+)((?:&quot;|"))`,
+  "gi"
+);
+const encodedPublicPathPattern = new RegExp(
+  `(publicPath(?:&quot;|")\\s*:\\s*(?:&quot;|"))(\\/(?!\\/)[^"&<]+)((?:&quot;|"))`,
+  "gi"
+);
 
 /**
  * Rewrite root-relative URLs (e.g. "/css/app.css") to include the preview prefix
@@ -82,9 +90,29 @@ function rewriteHtmlForPreview(html: string, crawlId: string): string {
     })
     .replace(/(\sstyle\s*=\s*)(["'])([\s\S]*?)\2/gi, (_match, prefix: string, quote: string, styleValue: string) => {
       return `${prefix}${quote}${rewriteCssForPreview(styleValue, crawlId)}${quote}`;
+    })
+    .replace(encodedClientModuleUrlPattern, (_match, prefix: string, value: string, suffix: string) => {
+      const rewritten = rewriteRootRelativeUrl(value, previewPrefix);
+      return `${prefix}${rewritten}${suffix}`;
+    })
+    .replace(encodedPublicPathPattern, (_match, prefix: string, value: string, suffix: string) => {
+      const rewritten = rewriteRootRelativeUrl(value, previewPrefix);
+      return `${prefix}${rewritten}${suffix}`;
     });
 
   return rewrittenAttrs;
+}
+
+function rewriteJsonForPreview(json: string, crawlId: string): string {
+  const previewPrefix = `/preview/${crawlId}`;
+
+  return json.replace(
+    /("(?:clientModuleUrl|publicPath)"\s*:\s*")(\/(?!\/)[^"]*)(")/gi,
+    (_match, prefix: string, value: string, suffix: string) => {
+      const rewritten = rewriteRootRelativeUrl(value, previewPrefix);
+      return `${prefix}${rewritten}${suffix}`;
+    }
+  );
 }
 
 // Serve preview files from storage
@@ -116,6 +144,7 @@ app.get("/:crawlId/*", async (c) => {
         return new Response(html, {
           headers: {
             "Content-Type": "text/html; charset=utf-8",
+            "Cache-Control": "no-store",
           },
         });
       }
@@ -131,7 +160,7 @@ app.get("/:crawlId/*", async (c) => {
       return new Response(html, {
         headers: {
           "Content-Type": contentType,
-          "Cache-Control": "public, max-age=3600",
+          "Cache-Control": "no-store",
         },
       });
     }
@@ -142,6 +171,16 @@ app.get("/:crawlId/*", async (c) => {
         headers: {
           "Content-Type": contentType,
           "Cache-Control": "public, max-age=3600",
+        },
+      });
+    }
+
+    if (contentType.includes("application/json")) {
+      const json = rewriteJsonForPreview(content.toString("utf-8"), crawlId);
+      return new Response(json, {
+        headers: {
+          "Content-Type": contentType,
+          "Cache-Control": "no-store",
         },
       });
     }

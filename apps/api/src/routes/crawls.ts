@@ -122,7 +122,18 @@ app.get("/:id/download", async (c) => {
   }
 
   const storage = getStorage();
-  const files = await storage.listFiles(crawl.outputPath);
+  let files: string[] = [];
+
+  try {
+    files = await storage.listFiles(crawl.outputPath);
+  } catch (error) {
+    console.error("[download] Failed to list crawl files", {
+      crawlId: id,
+      outputPath: crawl.outputPath,
+      error: (error as Error).message,
+    });
+    return c.json({ error: "Failed to load archive from storage" }, 500);
+  }
 
   if (files.length === 0) {
     return c.json({ error: "No files found" }, 404);
@@ -137,10 +148,19 @@ app.get("/:id/download", async (c) => {
   c.header("Content-Disposition", `attachment; filename="${filename}"`);
 
   // Add files to archive
-  for (const file of files) {
-    const content = await storage.readFile(file);
-    const relativePath = file.replace(`${crawl.outputPath}/`, "");
-    archive.append(content, { name: relativePath });
+  try {
+    for (const file of files) {
+      const content = await storage.readFile(file);
+      const relativePath = file.replace(`${crawl.outputPath}/`, "");
+      archive.append(content, { name: relativePath });
+    }
+  } catch (error) {
+    console.error("[download] Failed to read crawl file", {
+      crawlId: id,
+      outputPath: crawl.outputPath,
+      error: (error as Error).message,
+    });
+    return c.json({ error: "Failed to stream archive from storage" }, 500);
   }
 
   archive.finalize();

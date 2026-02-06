@@ -166,8 +166,11 @@ export class S3Storage implements StorageAdapter {
         })
       );
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      if (isMissingObjectError(error)) {
+        return false;
+      }
+      throw error;
     }
   }
 
@@ -231,4 +234,24 @@ async function streamToBuffer(stream: Readable): Promise<Buffer> {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   return Buffer.concat(chunks);
+}
+
+function isMissingObjectError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const maybeError = error as {
+    name?: string;
+    Code?: string;
+    $metadata?: { httpStatusCode?: number };
+  };
+
+  const code = maybeError.name || maybeError.Code;
+  return (
+    code === "NotFound" ||
+    code === "NoSuchKey" ||
+    code === "NotFoundError" ||
+    maybeError.$metadata?.httpStatusCode === 404
+  );
 }

@@ -88,9 +88,38 @@ app.get("/:crawlId/*", async (c) => {
       },
     });
   } catch (error) {
-    return c.json({ error: "File not found" }, 404);
+    if (isMissingFileError(error)) {
+      return c.json({ error: "File not found" }, 404);
+    }
+
+    console.error("[preview] Failed to read preview file", {
+      crawlId,
+      filePath: fullPath,
+      error: (error as Error).message,
+    });
+    return c.json({ error: "Failed to load preview file from storage" }, 500);
   }
 });
+
+function isMissingFileError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const maybeError = error as {
+    name?: string;
+    Code?: string;
+    $metadata?: { httpStatusCode?: number };
+  };
+  const code = maybeError.name || maybeError.Code;
+
+  return (
+    code === "NotFound" ||
+    code === "NoSuchKey" ||
+    code === "NotFoundError" ||
+    maybeError.$metadata?.httpStatusCode === 404
+  );
+}
 
 function getContentType(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase();

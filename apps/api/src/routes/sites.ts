@@ -41,18 +41,29 @@ function getNextScheduledAt(scheduleEnabled: boolean, scheduleCron?: string | nu
 }
 
 function getDefaultStorageType(): "local" | "s3" {
-  const explicit = process.env.STORAGE_TYPE;
-  if (explicit === "s3" || explicit === "local") {
-    return explicit;
-  }
+  const explicit = (process.env.STORAGE_TYPE || "").trim().toLowerCase();
 
   const endpoint = process.env.S3_ENDPOINT || process.env.R2_ENDPOINT;
   const accessKeyId = process.env.S3_ACCESS_KEY_ID || process.env.R2_ACCESS_KEY_ID;
   const secretAccessKey =
     process.env.S3_SECRET_ACCESS_KEY || process.env.R2_SECRET_ACCESS_KEY;
   const bucket = process.env.S3_BUCKET || process.env.R2_BUCKET;
-
   const hasS3Config = Boolean(endpoint && accessKeyId && secretAccessKey && bucket);
+
+  if (explicit === "s3" || explicit === "r2") {
+    return "s3";
+  }
+
+  if (explicit === "local") {
+    return hasS3Config && process.env.FORCE_LOCAL_STORAGE !== "true" ? "s3" : "local";
+  }
+
+  if (explicit !== "" && explicit !== "auto") {
+    console.warn(
+      `[sites] Unsupported STORAGE_TYPE=\"${process.env.STORAGE_TYPE}\". Falling back to ${hasS3Config ? "s3" : "local"}.`
+    );
+  }
+
   return hasS3Config ? "s3" : "local";
 }
 

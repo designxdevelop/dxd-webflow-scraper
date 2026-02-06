@@ -14,8 +14,7 @@ export function getStorage(): StorageAdapter {
 
 function getStorageConfig(): StorageConfig {
   const s3Env = getS3Env();
-  const explicitType = (process.env.STORAGE_TYPE || "") as "local" | "s3" | "";
-  const inferredType = explicitType || (hasS3Config(s3Env) ? "s3" : "local");
+  const inferredType = resolveStorageType(s3Env);
 
   if (inferredType === "s3") {
     const missing = getMissingS3Env(s3Env);
@@ -41,6 +40,35 @@ function getStorageConfig(): StorageConfig {
     type: "local",
     localPath: process.env.LOCAL_STORAGE_PATH || "./data",
   };
+}
+
+function resolveStorageType(s3Env: S3Env): "local" | "s3" {
+  const rawType = (process.env.STORAGE_TYPE || "").trim().toLowerCase();
+  const hasS3 = hasS3Config(s3Env);
+
+  if (rawType === "s3" || rawType === "r2") {
+    return "s3";
+  }
+
+  if (rawType === "auto" || rawType === "") {
+    return hasS3 ? "s3" : "local";
+  }
+
+  if (rawType === "local") {
+    if (hasS3 && process.env.FORCE_LOCAL_STORAGE !== "true") {
+      console.warn(
+        "[storage] STORAGE_TYPE=local but S3/R2 config is present. Using S3/R2. Set FORCE_LOCAL_STORAGE=true to force local storage."
+      );
+      return "s3";
+    }
+
+    return "local";
+  }
+
+  console.warn(
+    `[storage] Unsupported STORAGE_TYPE=\"${process.env.STORAGE_TYPE}\". Falling back to ${hasS3 ? "s3" : "local"}.`
+  );
+  return hasS3 ? "s3" : "local";
 }
 
 type S3Env = {

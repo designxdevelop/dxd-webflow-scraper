@@ -82,17 +82,66 @@ type S3Env = {
 };
 
 function getS3Env(): S3Env {
-  return {
-    endpoint: process.env.S3_ENDPOINT || process.env.R2_ENDPOINT,
-    accessKeyId: process.env.S3_ACCESS_KEY_ID || process.env.R2_ACCESS_KEY_ID,
-    secretAccessKey: process.env.S3_SECRET_ACCESS_KEY || process.env.R2_SECRET_ACCESS_KEY,
-    bucket: process.env.S3_BUCKET || process.env.R2_BUCKET,
-    region: process.env.S3_REGION || process.env.R2_REGION || "auto",
-    publicUrl: process.env.S3_PUBLIC_URL || process.env.R2_PUBLIC_URL,
-    forcePathStyle:
-      process.env.S3_FORCE_PATH_STYLE === "true" ||
-      process.env.R2_FORCE_PATH_STYLE === "true",
+  const r2Env: S3Env = {
+    endpoint: process.env.R2_ENDPOINT,
+    accessKeyId: process.env.R2_ACCESS_KEY_ID,
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+    bucket: process.env.R2_BUCKET,
+    region: process.env.R2_REGION || "auto",
+    publicUrl: process.env.R2_PUBLIC_URL,
+    forcePathStyle: process.env.R2_FORCE_PATH_STYLE === "true",
   };
+
+  const s3Env: S3Env = {
+    endpoint: process.env.S3_ENDPOINT,
+    accessKeyId: process.env.S3_ACCESS_KEY_ID,
+    secretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
+    bucket: process.env.S3_BUCKET,
+    region: process.env.S3_REGION || "auto",
+    publicUrl: process.env.S3_PUBLIC_URL,
+    forcePathStyle: process.env.S3_FORCE_PATH_STYLE === "true",
+  };
+
+  if (hasS3Config(r2Env)) {
+    if (hasAnyS3Env(s3Env)) {
+      console.warn(
+        "[storage] Both R2_* and S3_* env vars are set. Using R2_* values because R2 is fully configured."
+      );
+    }
+    return r2Env;
+  }
+
+  if (hasS3Config(s3Env)) {
+    return s3Env;
+  }
+
+  if (hasAnyS3Env(r2Env) && hasAnyS3Env(s3Env)) {
+    console.warn(
+      "[storage] Partial R2_* and S3_* env vars detected. Falling back to merged env resolution."
+    );
+  }
+
+  return {
+    endpoint: process.env.R2_ENDPOINT || process.env.S3_ENDPOINT,
+    accessKeyId: process.env.R2_ACCESS_KEY_ID || process.env.S3_ACCESS_KEY_ID,
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || process.env.S3_SECRET_ACCESS_KEY,
+    bucket: process.env.R2_BUCKET || process.env.S3_BUCKET,
+    region: process.env.R2_REGION || process.env.S3_REGION || "auto",
+    publicUrl: process.env.R2_PUBLIC_URL || process.env.S3_PUBLIC_URL,
+    forcePathStyle:
+      process.env.R2_FORCE_PATH_STYLE === "true" ||
+      process.env.S3_FORCE_PATH_STYLE === "true",
+  };
+}
+
+function hasAnyS3Env(s3Env: S3Env): boolean {
+  return Boolean(
+    s3Env.endpoint ||
+      s3Env.accessKeyId ||
+      s3Env.secretAccessKey ||
+      s3Env.bucket ||
+      s3Env.publicUrl
+  );
 }
 
 function hasS3Config(s3Env: S3Env): boolean {

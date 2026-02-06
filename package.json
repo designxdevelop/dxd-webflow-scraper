@@ -9,6 +9,9 @@
   "scripts": {
     "dev": "turbo dev",
     "build": "turbo build",
+    "build:api": "turbo run build --filter=@dxd/api",
+    "build:web": "turbo run build --filter=@dxd/web",
+    "build:worker": "turbo run build --filter=@dxd/worker",
     "start": "bun run start:api",
     "start:api": "bun run --filter @dxd/api start",
     "start:web": "bun run --filter @dxd/web start",

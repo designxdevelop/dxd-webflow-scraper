@@ -2,16 +2,16 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import { eq } from "drizzle-orm";
-import { db } from "../db/client.js";
 import { settings } from "../db/schema.js";
+import type { AppEnv } from "../env.js";
 
-const app = new Hono();
+const app = new Hono<AppEnv>();
 
 // Get all settings
 app.get("/", async (c) => {
+  const db = c.get("db");
   const allSettings = await db.query.settings.findMany();
 
-  // Convert to key-value object
   const settingsObj = allSettings.reduce(
     (acc, setting) => {
       acc[setting.key] = setting.value;
@@ -25,6 +25,7 @@ app.get("/", async (c) => {
 
 // Get single setting
 app.get("/:key", async (c) => {
+  const db = c.get("db");
   const key = c.req.param("key");
 
   const setting = await db.query.settings.findFirst({
@@ -42,6 +43,7 @@ app.get("/:key", async (c) => {
 const updateSettingsSchema = z.record(z.unknown());
 
 app.patch("/", zValidator("json", updateSettingsSchema), async (c) => {
+  const db = c.get("db");
   const data = c.req.valid("json");
 
   const updates = Object.entries(data).map(async ([key, value]) => {
@@ -61,6 +63,7 @@ app.patch("/", zValidator("json", updateSettingsSchema), async (c) => {
 
 // Update single setting
 app.put("/:key", async (c) => {
+  const db = c.get("db");
   const key = c.req.param("key");
   const body = await c.req.json();
 
@@ -77,6 +80,7 @@ app.put("/:key", async (c) => {
 
 // Delete setting
 app.delete("/:key", async (c) => {
+  const db = c.get("db");
   const key = c.req.param("key");
 
   const [deleted] = await db.delete(settings).where(eq(settings.key, key)).returning();

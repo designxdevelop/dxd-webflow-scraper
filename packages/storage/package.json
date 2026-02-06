@@ -4,7 +4,10 @@
   "type": "module",
   "main": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./s3": "./src/s3.ts",
+    "./r2": "./src/r2.ts",
+    "./adapter": "./src/adapter.ts"
   },
   "scripts": {
     "build": "tsc",
@@ -14,6 +17,7 @@
     "@aws-sdk/client-s3": "^3.816.0"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241230.0",
     "@types/node": "^22.0.0",
     "typescript": "^5.9.3"
   }

@@ -60,6 +60,22 @@ function parsePositiveIntEnv(name: string, fallback: number): number {
   return parsed;
 }
 
+async function withTimeout<T>(operation: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  if (timeoutMs <= 0) {
+    return operation;
+  }
+
+  return await Promise.race([
+    operation,
+    new Promise<T>((_, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      timer.unref();
+    }),
+  ]);
+}
+
 async function createPrebuiltArchive(crawlId: string, outputPath: string): Promise<string> {
   const archivePath = getArchivePath(outputPath);
   const outputPrefix = `${outputPath}/`;
@@ -87,7 +103,7 @@ async function createPrebuiltArchive(crawlId: string, outputPath: string): Promi
     });
   });
 
-  const archiveStream = Readable.toWeb(archive) as ReadableStream<Uint8Array>;
+  const archiveStream = Readable.toWeb(archive) as unknown as ReadableStream<Uint8Array>;
   let writeError: unknown;
   const writePromise = storage.writeStream(archivePath, archiveStream).catch((error) => {
     writeError = error;
@@ -97,7 +113,7 @@ async function createPrebuiltArchive(crawlId: string, outputPath: string): Promi
     for (const file of files) {
       const relativePath = file.slice(outputPrefix.length);
       const fileStream = storage.readStream(file);
-      archive.append(Readable.fromWeb(fileStream), { name: relativePath });
+      archive.append(Readable.fromWeb(fileStream as any), { name: relativePath });
     }
 
     await archive.finalize();
@@ -114,7 +130,17 @@ async function createPrebuiltArchive(crawlId: string, outputPath: string): Promi
 }
 
 async function publishEvent(crawlId: string, event: object) {
-  await pubClient.publish(`crawl:${crawlId}`, JSON.stringify(event));
+  const payload = JSON.stringify(event);
+  await pubClient.publish(`crawl:${crawlId}`, payload);
+  await pubClient.xadd(
+    `crawl-events:${crawlId}`,
+    "MAXLEN",
+    "~",
+    1000,
+    "*",
+    "data",
+    payload
+  );
 }
 
 async function processCrawlJob(job: Job<CrawlJobData>) {
@@ -160,6 +186,7 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
   const progressPersistIntervalMs = parsePositiveIntEnv("CRAWL_PROGRESS_PERSIST_INTERVAL_MS", 1500);
   const statusCheckIntervalMs = parsePositiveIntEnv("CRAWL_STATUS_CHECK_INTERVAL_MS", 3000);
   const maxSiteConcurrency = parsePositiveIntEnv("MAX_SITE_CONCURRENCY", 8);
+  const zipPrebuildTimeoutMs = parsePositiveIntEnv("ZIP_PREBUILD_TIMEOUT_MS", 120000);
   const crawlConcurrency = Math.max(1, Math.min(site.concurrency ?? 5, maxSiteConcurrency));
 
   if ((site.concurrency ?? 5) > crawlConcurrency) {
@@ -211,8 +238,19 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
     }
   };
 
-  // Create output directory
+  // Create output directory — check if partial output exists for resume
   const outputDir = await storage.createTempDir(crawlId);
+  let shouldResume = false;
+  try {
+    const stateFile = `${outputDir}/.crawl-state.json`;
+    const stateData = await fs.readFile(stateFile, "utf-8").catch(() => null);
+    if (stateData) {
+      shouldResume = true;
+      console.log(`[Worker] Found existing crawl state for ${crawlId}, resuming`);
+    }
+  } catch {
+    // No state file — fresh crawl
+  }
 
   try {
     const result = await crawlSite({
@@ -223,6 +261,7 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
       excludePatterns: site.excludePatterns ?? undefined,
       removeWebflowBadge: site.removeWebflowBadge ?? true,
       redirectsCsv: site.redirectsCsv ?? undefined,
+      resume: shouldResume,
       shouldAbort: async () => {
         try {
           await assertCrawlIsActive();
@@ -309,7 +348,11 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
     });
 
     try {
-      await createPrebuiltArchive(crawlId, finalPath);
+      await withTimeout(
+        createPrebuiltArchive(crawlId, finalPath),
+        zipPrebuildTimeoutMs,
+        `ZIP prebuild for crawl ${crawlId}`
+      );
     } catch (error) {
       console.error(`[Worker] Failed to prebuild archive: ${crawlId}`, error);
       await publishEvent(crawlId, {
@@ -350,8 +393,66 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
     console.error(`[Worker] Crawl failed: ${crawlId}`, error);
 
     const isCancelled = error instanceof CrawlCancelledError;
-    const status = isCancelled ? "cancelled" : "failed";
+    const isTimeout = error instanceof CrawlTimeoutError;
     const errorMessage = (error as Error).message;
+
+    // On timeout, save partial progress instead of deleting everything
+    if (isTimeout) {
+      console.log(`[Worker] Crawl timed out, saving partial results: ${crawlId}`);
+
+      try {
+        await db
+          .update(crawls)
+          .set({ status: "uploading" })
+          .where(eq(crawls.id, crawlId));
+
+        await publishEvent(crawlId, {
+          type: "log",
+          level: "warn",
+          message: `Crawl timed out after ${Math.round(maxDurationMs / 60000)} minutes. Saving partial results...`,
+          timestamp: new Date().toISOString(),
+        });
+
+        const finalPath = await storage.moveToFinal(outputDir, crawlId);
+        const outputSize = await storage.getSize(finalPath);
+
+        // Try to build ZIP for partial results too
+        try {
+          await withTimeout(
+            createPrebuiltArchive(crawlId, finalPath),
+            zipPrebuildTimeoutMs,
+            `ZIP prebuild for partial crawl ${crawlId}`
+          );
+        } catch {
+          // Non-critical
+        }
+
+        await db
+          .update(crawls)
+          .set({
+            status: "timed_out",
+            completedAt: new Date(),
+            outputPath: finalPath,
+            outputSizeBytes: outputSize,
+            errorMessage,
+          })
+          .where(eq(crawls.id, crawlId));
+
+        await publishEvent(crawlId, {
+          type: "log",
+          level: "warn",
+          message: `Partial results saved (timed out).`,
+          timestamp: new Date().toISOString(),
+        });
+
+        return; // Don't re-throw — partial success
+      } catch (uploadError) {
+        console.error(`[Worker] Failed to save partial results: ${crawlId}`, uploadError);
+        // Fall through to normal failure handling
+      }
+    }
+
+    const status = isCancelled ? "cancelled" : "failed";
 
     await db
       .update(crawls)
@@ -377,10 +478,6 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
 
     if (isCancelled) {
       return;
-    }
-
-    if (error instanceof CrawlTimeoutError) {
-      throw new UnrecoverableError(error.message);
     }
 
     throw error;

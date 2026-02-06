@@ -1,7 +1,7 @@
 import path from "node:path";
 import os from "node:os";
 import fs from "fs-extra";
-import { chromium, Browser } from "playwright";
+import { chromium, Browser, BrowserContext } from "playwright";
 import { fetchSitemapUrls } from "./sitemap-parser.js";
 import { AssetDownloader } from "./asset-downloader.js";
 import { processPage } from "./page-processor.js";
@@ -14,6 +14,7 @@ import {
   updateStateProgress,
   filterUrlsForResume,
 } from "./state-manager.js";
+import { extractLinks } from "./link-extractor.js";
 
 const CRAWL_ABORT_MESSAGE = "Crawl cancelled by request.";
 const STATE_FLUSH_BATCH_SIZE = 100;
@@ -48,6 +49,63 @@ function isAbortError(error: unknown): boolean {
     return false;
   }
   return error.message.includes(CRAWL_ABORT_MESSAGE);
+}
+
+/**
+ * Determine if an error is transient and worth retrying.
+ */
+function isTransientError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const msg = error.message.toLowerCase();
+  // Retry on timeouts, 5xx, network errors
+  return (
+    msg.includes("timeout") ||
+    msg.includes("net::err") ||
+    msg.includes("econnrefused") ||
+    msg.includes("econnreset") ||
+    msg.includes("503") ||
+    msg.includes("502") ||
+    msg.includes("500") ||
+    msg.includes("429")
+  );
+}
+
+/**
+ * Retry a function with exponential backoff.
+ */
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  maxRetries: number,
+  baseDelayMs: number,
+  label: string,
+  shouldAbortFn?: () => boolean | Promise<boolean>
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+
+      // Don't retry abort errors
+      if (isAbortError(error)) throw error;
+
+      // Don't retry non-transient errors
+      if (!isTransientError(error) || attempt === maxRetries) {
+        throw error;
+      }
+
+      // Check if we should abort before retrying
+      if (shouldAbortFn && (await shouldAbortFn())) {
+        throw error;
+      }
+
+      const delay = baseDelayMs * Math.pow(2, attempt);
+      log.warn(`Retrying ${label} (attempt ${attempt + 2}/${maxRetries + 1}) after ${delay}ms: ${(error as Error).message}`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw lastError;
 }
 
 export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
@@ -158,11 +216,32 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
     );
 
     const browsers: Browser[] = [];
+    const contexts: BrowserContext[] = [];
     const pendingSucceeded: string[] = [];
     const pendingFailed: string[] = [];
     let processed = 0;
     let succeededCount = state.succeeded.length;
     let failedCount = state.failed.length;
+
+    // B2: Shared work queue — all browsers pull from a single pool
+    const visitedUrls = new Set<string>([...state.succeeded, ...state.failed]);
+    const urlQueue = [...pages];
+    let nextIndex = 0;
+
+    // B7: Link discovery support
+    const discoverLinks = options.discoverLinks ?? false;
+    const maxTotalUrls = options.maxPages ?? Infinity;
+
+    function getNextUrl(): string | null {
+      while (nextIndex < urlQueue.length) {
+        const url = urlQueue[nextIndex++];
+        if (!visitedUrls.has(url)) {
+          visitedUrls.add(url);
+          return url;
+        }
+      }
+      return null;
+    }
 
     const flushStateProgress = async (force: boolean): Promise<void> => {
       if (!force && pendingSucceeded.length + pendingFailed.length < STATE_FLUSH_BATCH_SIZE) {
@@ -181,7 +260,7 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
         return;
       }
       const progress: CrawlProgress = {
-        total: allPages.length,
+        total: Math.max(allPages.length, urlQueue.length),
         succeeded: succeededCount,
         failed: failedCount,
         currentUrl,
@@ -189,53 +268,69 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
       await options.onProgress(progress);
     };
 
+    const maxRetries = readPositiveInt("CRAWL_PAGE_MAX_RETRIES", 2);
+    const retryBaseDelayMs = readPositiveInt("CRAWL_PAGE_RETRY_DELAY_MS", 2000);
+
     try {
       for (let i = 0; i < numBrowsers; i++) {
         await assertNotAborted(options);
-        browsers.push(await chromium.launch({ headless: true }));
+        const browser = await chromium.launch({ headless: true });
+        browsers.push(browser);
+        // B4: Create one context per browser and reuse it
+        const context = await browser.newContext();
+        contexts.push(context);
       }
 
-      const browserQueues: string[][] = Array.from({ length: numBrowsers }, () => []);
-      pages.forEach((url, index) => {
-        browserQueues[index % numBrowsers].push(url);
-      });
-
+      // B2: Shared work queue — each browser worker pulls from the same pool
       await Promise.all(
         browsers.map(async (browser, browserIndex) => {
-          const queue = browserQueues[browserIndex];
-          let nextIndex = 0;
-          const workerCount = Math.max(1, Math.min(concurrencyPerBrowser, queue.length));
+          const context = contexts[browserIndex];
+          const workerCount = Math.max(1, Math.min(concurrencyPerBrowser, urlQueue.length));
 
           const workers = Array.from({ length: workerCount }, async () => {
             while (true) {
               await assertNotAborted(options);
 
-              const queueIndex = nextIndex++;
-              if (queueIndex >= queue.length) {
-                return;
-              }
+              const url = getNextUrl();
+              if (!url) return;
 
-              const url = queue[queueIndex];
               const position = ++processed;
               await reportProgress(url);
 
               try {
-                const relativePath = await processPage({
+                // B3: Retry with exponential backoff
+                const { relativePath, html } = await withRetry(
+                  () => processPage({
+                    url,
+                    context,
+                    outputDir: resolvedOutput,
+                    assets: assetDownloader,
+                    removeWebflowBadge: options.removeWebflowBadge ?? true,
+                    shouldAbort: options.shouldAbort,
+                    signal: options.signal,
+                  }),
+                  maxRetries,
+                  retryBaseDelayMs,
                   url,
-                  browser,
-                  outputDir: resolvedOutput,
-                  assets: assetDownloader,
-                  removeWebflowBadge: options.removeWebflowBadge ?? true,
-                  shouldAbort: options.shouldAbort,
-                  signal: options.signal,
-                });
+                  options.shouldAbort
+                );
 
                 succeededCount += 1;
                 pendingSucceeded.push(url);
 
+                // B7: Discover new URLs from the crawled page
+                if (discoverLinks && html && urlQueue.length < maxTotalUrls) {
+                  const discovered = extractLinks(html, url, options.baseUrl);
+                  for (const newUrl of discovered) {
+                    if (!visitedUrls.has(newUrl) && urlQueue.length < maxTotalUrls) {
+                      urlQueue.push(newUrl);
+                    }
+                  }
+                }
+
                 if (position % 25 === 0 || position === pages.length) {
                   log.info(
-                    `Progress: ${position}/${pages.length} processed (${succeededCount} succeeded, ${failedCount} failed)`
+                    `Progress: ${position}/${urlQueue.length} processed (${succeededCount} succeeded, ${failedCount} failed)`
                   );
                 } else {
                   log.debug(`Archived ${url} -> ${relativePath}`, url);
@@ -246,7 +341,7 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
                 }
                 failedCount += 1;
                 pendingFailed.push(url);
-                log.error(`(${position}/${pages.length}) Failed ${url}: ${(error as Error).message}`, url);
+                log.error(`(${position}/${urlQueue.length}) Failed ${url}: ${(error as Error).message}`, url);
               }
 
               await flushStateProgress(false);
@@ -257,6 +352,12 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
         })
       );
     } finally {
+      // B4: Close contexts, then browsers
+      await Promise.all(
+        contexts.map(async (ctx) => {
+          await ctx.close().catch(() => undefined);
+        })
+      );
       await Promise.all(
         browsers.map(async (browser) => {
           await browser.close().catch(() => undefined);
@@ -270,7 +371,7 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
     await reportProgress();
 
     return {
-      total: allPages.length,
+      total: Math.max(allPages.length, urlQueue.length),
       succeeded: succeededCount,
       failed: failedCount,
       durationMs: Date.now() - startedAt,

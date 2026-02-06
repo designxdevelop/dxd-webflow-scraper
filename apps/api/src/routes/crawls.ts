@@ -1,16 +1,14 @@
 import { Hono } from "hono";
 import { eq, desc, and } from "drizzle-orm";
-import { db } from "../db/client.js";
 import { crawls, crawlLogs, sites } from "../db/schema.js";
-import { crawlQueue } from "../queue/client.js";
-import { getStorage } from "@dxd/storage";
-import archiver from "archiver";
-import { Readable } from "node:stream";
+import { downloadZip } from "client-zip";
+import type { AppEnv } from "../env.js";
 
-const app = new Hono();
+const app = new Hono<AppEnv>();
 
 // List crawls with optional filters
 app.get("/", async (c) => {
+  const db = c.get("db");
   const siteId = c.req.query("siteId");
   const status = c.req.query("status");
   const limit = parseInt(c.req.query("limit") || "50");
@@ -39,6 +37,7 @@ app.get("/", async (c) => {
 
 // Get single crawl with logs
 app.get("/:id", async (c) => {
+  const db = c.get("db");
   const id = c.req.param("id");
 
   const crawl = await db.query.crawls.findFirst({
@@ -61,6 +60,7 @@ app.get("/:id", async (c) => {
 
 // Get crawl logs
 app.get("/:id/logs", async (c) => {
+  const db = c.get("db");
   const id = c.req.param("id");
   const limit = parseInt(c.req.query("limit") || "100");
   const offset = parseInt(c.req.query("offset") || "0");
@@ -77,6 +77,8 @@ app.get("/:id/logs", async (c) => {
 
 // Cancel a crawl
 app.post("/:id/cancel", async (c) => {
+  const db = c.get("db");
+  const queue = c.get("queue");
   const id = c.req.param("id");
 
   const crawl = await db.query.crawls.findFirst({
@@ -92,11 +94,7 @@ app.post("/:id/cancel", async (c) => {
   }
 
   if (crawl.status === "pending") {
-    try {
-      await crawlQueue.remove(id);
-    } catch {
-      // If the job no longer exists, the DB status update below still makes cancellation idempotent.
-    }
+    await queue.removeCrawlJob(id);
   }
 
   const [updated] = await db
@@ -112,8 +110,10 @@ app.post("/:id/cancel", async (c) => {
   return c.json({ crawl: updated });
 });
 
-// Download crawl as zip
+// Download crawl as zip — Workers-compatible using client-zip
 app.get("/:id/download", async (c) => {
+  const db = c.get("db");
+  const storage = c.get("storage");
   const id = c.req.param("id");
 
   const crawl = await db.query.crawls.findFirst({
@@ -131,11 +131,11 @@ app.get("/:id/download", async (c) => {
     return c.json({ error: "Crawl output not available" }, 400);
   }
 
-  const storage = getStorage();
-  const archivePath = `${crawl.outputPath}.zip`;
   const siteName = crawl.site?.name || "archive";
   const filename = `${siteName}-${crawl.id.slice(0, 8)}.zip`;
 
+  // Try pre-built archive first
+  const archivePath = `${crawl.outputPath}.zip`;
   try {
     const archiveExists = await storage.exists(archivePath);
     if (archiveExists) {
@@ -154,8 +154,9 @@ app.get("/:id/download", async (c) => {
     });
   }
 
+  // Fall back to on-demand zip generation using client-zip (Workers-compatible)
   const outputPrefix = `${crawl.outputPath}/`;
-  let files: string[] = [];
+  let files: string[];
 
   try {
     files = (await storage.listFiles(crawl.outputPath)).filter((file) =>
@@ -174,48 +175,18 @@ app.get("/:id/download", async (c) => {
     return c.json({ error: "No files found" }, 404);
   }
 
-  // Create zip archive
-  const archive = archiver("zip", { zlib: { level: 9 } });
-
-  archive.on("warning", (error) => {
-    console.warn("[download] Archive warning", {
-      crawlId: id,
-      outputPath: crawl.outputPath,
-      error: error.message,
-    });
-  });
-
-  archive.on("error", (error) => {
-    console.error("[download] Archive error", {
-      crawlId: id,
-      outputPath: crawl.outputPath,
-      error: error.message,
-    });
-  });
-
-  // Build the zip in the background so headers are returned immediately.
-  void (async () => {
-    try {
-      for (const file of files) {
-        const relativePath = file.slice(outputPrefix.length);
-        const fileStream = storage.readStream(file);
-        archive.append(Readable.fromWeb(fileStream), { name: relativePath });
-      }
-
-      await archive.finalize();
-    } catch (error) {
-      console.error("[download] Failed to stream crawl file", {
-        crawlId: id,
-        outputPath: crawl.outputPath,
-        error: (error as Error).message,
-      });
-      archive.destroy(error as Error);
+  // Create an async iterable of file entries for client-zip
+  async function* fileEntries() {
+    for (const file of files) {
+      const relativePath = file.slice(outputPrefix.length);
+      const stream = storage.readStream(file);
+      yield { name: relativePath, input: stream };
     }
-  })();
+  }
 
-  // Convert archive to web stream
-  const webStream = Readable.toWeb(archive) as ReadableStream<Uint8Array>;
-  return new Response(webStream, {
+  const zipStream = downloadZip(fileEntries());
+
+  return new Response(zipStream.body, {
     headers: {
       "Content-Type": "application/zip",
       "Content-Disposition": `attachment; filename="${filename}"`,

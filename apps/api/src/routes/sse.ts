@@ -1,36 +1,31 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { subClient } from "../queue/client.js";
-import Redis from "ioredis";
+import type { AppEnv } from "../env.js";
 
-const app = new Hono();
+const app = new Hono<AppEnv>();
 
-// SSE endpoint for live crawl logs
+// SSE endpoint for live crawl logs.
+// Uses the PubSubClient abstraction:
+// - Node: ioredis pub/sub (persistent connection)
+// - Workers: polls Redis stream via Upstash HTTP
 app.get("/crawls/:id", async (c) => {
   const crawlId = c.req.param("id");
   const channel = `crawl:${crawlId}`;
+  const pubsub = c.get("pubsub");
 
   return streamSSE(c, async (stream) => {
-    // Create a dedicated subscriber for this connection
-    const subscriber = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
+    const unsubscribe = await pubsub.subscribe(channel, async (message) => {
+      try {
+        await stream.writeSSE({
+          data: message,
+          event: "message",
+        });
+      } catch {
+        // Stream closed
+      }
+    });
 
     try {
-      await subscriber.subscribe(channel);
-
-      // Set up message handler
-      subscriber.on("message", async (ch, message) => {
-        if (ch === channel) {
-          try {
-            await stream.writeSSE({
-              data: message,
-              event: "message",
-            });
-          } catch (error) {
-            // Stream closed, will be handled by cleanup
-          }
-        }
-      });
-
       // Send initial ping
       await stream.writeSSE({
         data: JSON.stringify({ type: "connected", crawlId }),
@@ -57,9 +52,7 @@ app.get("/crawls/:id", async (c) => {
         });
       });
     } finally {
-      // Cleanup
-      await subscriber.unsubscribe(channel);
-      await subscriber.quit();
+      await unsubscribe();
     }
   });
 });

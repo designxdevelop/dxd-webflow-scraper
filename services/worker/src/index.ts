@@ -1,5 +1,6 @@
 import { startWorker } from "./processor.js";
 import { startScheduler } from "./scheduler.js";
+import { startHttpServer } from "./http.js";
 
 console.log("=".repeat(50));
 console.log("DXD Webflow Scraper - Background Worker");
@@ -10,6 +11,10 @@ const worker = startWorker();
 
 // Start the scheduler
 startScheduler();
+
+// Start the HTTP API server (for receiving enqueue requests from Workers API)
+const httpPort = parseInt(process.env.WORKER_HTTP_PORT || "3002");
+startHttpServer(httpPort);
 
 // Handle graceful shutdown
 async function shutdown() {

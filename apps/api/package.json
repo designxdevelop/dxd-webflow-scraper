@@ -4,8 +4,10 @@
   "type": "module",
   "scripts": {
     "dev": "bun run --watch src/index.ts",
+    "dev:worker": "wrangler dev",
     "build": "echo 'No build needed - Bun runs TypeScript directly'",
     "start": "bun run src/index.ts",
+    "deploy": "wrangler deploy",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
@@ -18,8 +20,8 @@
     "@hono/auth-js": "^1.1.0",
     "@hono/node-server": "^1.14.1",
     "@hono/zod-validator": "^0.5.0",
-    "archiver": "^7.0.1",
     "bullmq": "^5.52.0",
+    "client-zip": "^2.4.6",
     "cron-parser": "^5.5.0",
     "drizzle-orm": "^0.44.2",
     "hono": "^4.7.7",
@@ -28,9 +30,10 @@
     "zod": "^3.25.17"
   },
   "devDependencies": {
-    "@types/archiver": "^6.0.3",
+    "@cloudflare/workers-types": "^4.20241230.0",
     "@types/node": "^22.0.0",
     "drizzle-kit": "^0.31.1",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "wrangler": "^3.99.0"
   }
 }

@@ -1,0 +1,30 @@
+name = "dxd-api"
+main = "src/worker-entry.ts"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# R2 bucket binding — same bucket the worker writes to via S3-compatible API
+[[r2_buckets]]
+binding = "STORAGE_BUCKET"
+bucket_name = "dxd-storage"
+
+# Hyperdrive — connection pooler/proxy to Railway PostgreSQL
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "REPLACE_WITH_HYPERDRIVE_CONFIG_ID"
+
+# Environment variables (non-secrets — set via wrangler.toml)
+[vars]
+NODE_ENV = "production"
+FRONTEND_URL = "https://archiver.designxdevelop.com"
+CORS_ALLOWED_ORIGINS = ""
+
+# Secrets (set via `wrangler secret put`):
+# - AUTH_SECRET
+# - AUTH_URL
+# - GITHUB_CLIENT_ID
+# - GITHUB_CLIENT_SECRET
+# - UPSTASH_REDIS_REST_URL
+# - UPSTASH_REDIS_REST_TOKEN
+# - WORKER_SERVICE_URL
+# - WORKER_API_SECRET

@@ -3,11 +3,10 @@ import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import { eq, desc, and, inArray } from "drizzle-orm";
 import cronParser from "cron-parser";
-import { db } from "../db/client.js";
 import { sites, crawls } from "../db/schema.js";
-import { crawlQueue } from "../queue/client.js";
+import type { AppEnv } from "../env.js";
 
-const app = new Hono();
+const app = new Hono<AppEnv>();
 
 // Validation schemas
 const createSiteSchema = z.object({
@@ -40,35 +39,9 @@ function getNextScheduledAt(scheduleEnabled: boolean, scheduleCron?: string | nu
   }
 }
 
-function getDefaultStorageType(): "local" | "s3" {
-  const explicit = (process.env.STORAGE_TYPE || "").trim().toLowerCase();
-
-  const endpoint = process.env.S3_ENDPOINT || process.env.R2_ENDPOINT;
-  const accessKeyId = process.env.S3_ACCESS_KEY_ID || process.env.R2_ACCESS_KEY_ID;
-  const secretAccessKey =
-    process.env.S3_SECRET_ACCESS_KEY || process.env.R2_SECRET_ACCESS_KEY;
-  const bucket = process.env.S3_BUCKET || process.env.R2_BUCKET;
-  const hasS3Config = Boolean(endpoint && accessKeyId && secretAccessKey && bucket);
-
-  if (explicit === "s3" || explicit === "r2") {
-    return "s3";
-  }
-
-  if (explicit === "local") {
-    return hasS3Config && process.env.FORCE_LOCAL_STORAGE !== "true" ? "s3" : "local";
-  }
-
-  if (explicit !== "" && explicit !== "auto") {
-    console.warn(
-      `[sites] Unsupported STORAGE_TYPE=\"${process.env.STORAGE_TYPE}\". Falling back to ${hasS3Config ? "s3" : "local"}.`
-    );
-  }
-
-  return hasS3Config ? "s3" : "local";
-}
-
 // List all sites
 app.get("/", async (c) => {
+  const db = c.get("db");
   const allSites = await db.query.sites.findMany({
     orderBy: desc(sites.createdAt),
     with: {
@@ -89,6 +62,7 @@ app.get("/", async (c) => {
 
 // Get single site
 app.get("/:id", async (c) => {
+  const db = c.get("db");
   const id = c.req.param("id");
 
   const site = await db.query.sites.findFirst({
@@ -110,6 +84,7 @@ app.get("/:id", async (c) => {
 
 // Create site
 app.post("/", zValidator("json", createSiteSchema), async (c) => {
+  const db = c.get("db");
   const data = c.req.valid("json");
 
   const scheduleEnabled = data.scheduleEnabled ?? false;
@@ -129,7 +104,7 @@ app.post("/", zValidator("json", createSiteSchema), async (c) => {
       scheduleEnabled,
       scheduleCron,
       nextScheduledAt,
-      storageType: data.storageType ?? getDefaultStorageType(),
+      storageType: data.storageType ?? "s3",
       storagePath: data.storagePath,
     })
     .returning();
@@ -139,6 +114,7 @@ app.post("/", zValidator("json", createSiteSchema), async (c) => {
 
 // Update site
 app.patch("/:id", zValidator("json", updateSiteSchema), async (c) => {
+  const db = c.get("db");
   const id = c.req.param("id");
   const data = c.req.valid("json");
 
@@ -171,6 +147,7 @@ app.patch("/:id", zValidator("json", updateSiteSchema), async (c) => {
 
 // Delete site
 app.delete("/:id", async (c) => {
+  const db = c.get("db");
   const id = c.req.param("id");
 
   const [site] = await db.delete(sites).where(eq(sites.id, id)).returning();
@@ -184,6 +161,8 @@ app.delete("/:id", async (c) => {
 
 // Start a crawl for a site
 app.post("/:id/crawl", async (c) => {
+  const db = c.get("db");
+  const queue = c.get("queue");
   const siteId = c.req.param("id");
 
   const site = await db.query.sites.findFirst({
@@ -214,17 +193,8 @@ app.post("/:id/crawl", async (c) => {
     })
     .returning();
 
-  // Queue the job
-  await crawlQueue.add(
-    "crawl",
-    {
-      siteId,
-      crawlId: crawl.id,
-    },
-    {
-      jobId: crawl.id,
-    }
-  );
+  // Queue the job via abstracted client (BullMQ on Node, HTTP on Workers)
+  await queue.addCrawlJob(siteId, crawl.id);
 
   return c.json({ crawl }, 201);
 });

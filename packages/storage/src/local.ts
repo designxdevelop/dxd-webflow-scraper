@@ -28,7 +28,7 @@ export class LocalStorage implements StorageAdapter {
   readStream(filePath: string): ReadableStream<Uint8Array> {
     const fullPath = path.join(this.basePath, filePath);
     const nodeStream = fs.createReadStream(fullPath);
-    return Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;
+    return Readable.toWeb(nodeStream) as unknown as ReadableStream<Uint8Array>;
   }
 
   async listFiles(prefix: string): Promise<string[]> {

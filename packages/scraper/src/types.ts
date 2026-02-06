@@ -49,8 +49,15 @@ export interface CrawlOptions {
   retryFailed?: boolean;
   stateFile?: string;
   redirectsCsv?: string;
+  /** Enable link-based URL discovery from crawled pages (spider mode). */
+  discoverLinks?: boolean;
   signal?: AbortSignal;
   shouldAbort?: () => boolean | Promise<boolean>;
   onProgress?: (progress: CrawlProgress) => void | Promise<void>;
   onLog?: (level: LogLevel, message: string, url?: string) => void | Promise<void>;
+}
+
+export interface PageResult {
+  relativePath: string;
+  html: string;
 }

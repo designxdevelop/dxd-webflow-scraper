@@ -3,6 +3,7 @@ import path from "node:path";
 import fs from "fs-extra";
 import { AssetCategory } from "./types.js";
 import { log } from "./logger.js";
+import type { AssetCache } from "./asset-cache.js";
 
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".avif", ".ico"]);
 const FONT_EXTS = new Set([".woff2", ".woff", ".ttf", ".otf", ".eot"]);
@@ -14,8 +15,11 @@ export class AssetDownloader {
   private cache = new Map<string, string>();
   private directPathCache = new Map<string, string>();
   private dirs: CategoryDir;
+  /** B6: Optional cross-crawl disk cache. */
+  private diskCache: AssetCache | null;
 
-  constructor(private outputDir: string) {
+  constructor(private outputDir: string, diskCache?: AssetCache) {
+    this.diskCache = diskCache ?? null;
     this.dirs = {
       css: path.join(outputDir, "css"),
       js: path.join(outputDir, "js"),
@@ -45,10 +49,22 @@ export class AssetDownloader {
 
     let relativePath: string | undefined;
     try {
+      // B6: Check disk cache before network fetch
+      if (this.diskCache && category !== "css" && category !== "js") {
+        // Only cache binary assets — CSS/JS need URL rewriting which is context-dependent
+        const cached = await this.diskCache.get(normalized);
+        if (cached) {
+          const contentType = null;
+          relativePath = await this.writeBinaryAsset(cached, normalized, category, contentType);
+          const webPath = `/${relativePath.replace(/\\+/g, "/")}`;
+          this.cache.set(normalized, webPath);
+          return webPath;
+        }
+      }
+
       const res = await fetch(normalized, {
         redirect: "follow",
         headers: {
-          // Some CDNs block default undici UA; emulate a browser.
           "user-agent":
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
           accept: "*/*",
@@ -70,6 +86,11 @@ export class AssetDownloader {
         const contentType = res.headers.get("content-type");
         const buffer = Buffer.from(await res.arrayBuffer());
         relativePath = await this.writeBinaryAsset(buffer, normalized, category, contentType);
+
+        // B6: Write binary assets to disk cache for future crawls
+        if (this.diskCache) {
+          await this.diskCache.put(normalized, buffer).catch(() => {});
+        }
       }
     } catch (error) {
       log.warn(`Could not download ${normalized}: ${(error as Error).message}`);

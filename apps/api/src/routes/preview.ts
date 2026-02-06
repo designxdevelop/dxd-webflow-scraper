@@ -32,9 +32,18 @@ function injectBaseTag(html: string, basePath: string): string {
 function rewritePreviewHtml(html: string, basePath: string): string {
   // Prefix common root-relative HTML attributes to preview path.
   // Example: href="/css/app.css" -> href="/preview/{crawlId}/css/app.css"
+  const previewPrefix = basePath.replace(/^\//, "");
+
   return html.replace(
     /(\s(?:src|href|poster|content)=["'])\/(?!\/)([^"']*)(["'])/gi,
-    `$1${basePath}$2$3`
+    (_match, attrPrefix: string, pathValue: string, attrSuffix: string) => {
+      // Avoid rewriting values that are already preview-prefixed.
+      if (pathValue.startsWith(previewPrefix)) {
+        return `${attrPrefix}/${pathValue}${attrSuffix}`;
+      }
+
+      return `${attrPrefix}${basePath}${pathValue}${attrSuffix}`;
+    }
   );
 }
 

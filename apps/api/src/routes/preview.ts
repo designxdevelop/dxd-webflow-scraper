@@ -8,10 +8,8 @@ import path from "node:path";
 const app = new Hono();
 
 /**
- * Inject a <base> tag into HTML to make absolute asset paths work.
- * The scraped HTML uses absolute paths like /css/style.css, /images/logo.png
- * but when served at /preview/{crawlId}/, these paths would 404.
- * The <base> tag tells the browser to resolve all URLs relative to the crawl path.
+ * Inject a <base> tag into HTML to make relative asset paths work in preview.
+ * Note: root-relative URLs (e.g. /css/app.css) are NOT affected by <base>.
  */
 function injectBaseTag(html: string, basePath: string): string {
   const baseTag = `<base href="${basePath}">`;
@@ -31,9 +29,46 @@ function injectBaseTag(html: string, basePath: string): string {
   return baseTag + html;
 }
 
+function rewritePreviewHtml(html: string, basePath: string): string {
+  // Prefix common root-relative HTML attributes to preview path.
+  // Example: href="/css/app.css" -> href="/preview/{crawlId}/css/app.css"
+  return html.replace(
+    /(\s(?:src|href|poster|content)=["'])\/(?!\/)([^"']*)(["'])/gi,
+    `$1${basePath}$2$3`
+  );
+}
+
+function rewritePreviewCss(css: string, basePath: string): string {
+  let rewritten = css;
+
+  // url("/images/x.png") and url(/images/x.png)
+  rewritten = rewritten.replace(
+    /url\(\s*(["']?)\/(?!\/)([^)"']+)\1\s*\)/gi,
+    `url($1${basePath}$2$1)`
+  );
+
+  // @import "/css/x.css" and @import url("/css/x.css")
+  rewritten = rewritten.replace(
+    /@import\s+(?:url\(\s*)?(["'])\/(?!\/)([^)"']+)\1(?:\s*\))?/gi,
+    `@import url($1${basePath}$2$1)`
+  );
+
+  return rewritten;
+}
+
+function rewritePreviewJs(js: string, basePath: string): string {
+  // Prefix root-relative static asset paths often embedded in runtime bundles.
+  // Keep this conservative to avoid altering unrelated API URLs.
+  return js.replace(
+    /(["'])\/((?:css|js|images?|fonts?|media|assets)\/[^"'`\s]+)\1/gi,
+    `$1${basePath}$2$1`
+  );
+}
+
 // Serve preview files from storage
 app.get("/:crawlId/*", async (c) => {
   const crawlId = c.req.param("crawlId");
+  const previewBasePath = `/preview/${crawlId}/`;
   const filePath = c.req.path.replace(`/preview/${crawlId}/`, "") || "index.html";
 
   const crawl = await db.query.crawls.findFirst({
@@ -57,7 +92,8 @@ app.get("/:crawlId/*", async (c) => {
       if (indexExists) {
         let content = await storage.readFile(indexPath);
         // Inject base tag for HTML files
-        const html = injectBaseTag(content.toString("utf-8"), `/preview/${crawlId}/`);
+        const htmlWithBase = injectBaseTag(content.toString("utf-8"), previewBasePath);
+        const html = rewritePreviewHtml(htmlWithBase, previewBasePath);
         return new Response(html, {
           headers: {
             "Content-Type": "text/html; charset=utf-8",
@@ -70,10 +106,31 @@ app.get("/:crawlId/*", async (c) => {
     const content = await storage.readFile(fullPath);
     const contentType = getContentType(filePath);
 
-    // Inject base tag for HTML files so absolute asset paths work
+    // Inject base tag and rewrite root-relative URLs for preview mode.
     if (contentType.includes("text/html")) {
-      const html = injectBaseTag(content.toString("utf-8"), `/preview/${crawlId}/`);
+      const htmlWithBase = injectBaseTag(content.toString("utf-8"), previewBasePath);
+      const html = rewritePreviewHtml(htmlWithBase, previewBasePath);
       return new Response(html, {
+        headers: {
+          "Content-Type": contentType,
+          "Cache-Control": "public, max-age=3600",
+        },
+      });
+    }
+
+    if (contentType.includes("text/css")) {
+      const css = rewritePreviewCss(content.toString("utf-8"), previewBasePath);
+      return new Response(css, {
+        headers: {
+          "Content-Type": contentType,
+          "Cache-Control": "public, max-age=3600",
+        },
+      });
+    }
+
+    if (contentType.includes("application/javascript")) {
+      const js = rewritePreviewJs(content.toString("utf-8"), previewBasePath);
+      return new Response(js, {
         headers: {
           "Content-Type": contentType,
           "Cache-Control": "public, max-age=3600",

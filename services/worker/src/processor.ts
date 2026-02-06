@@ -5,6 +5,8 @@ import { crawlSite, type CrawlProgress, type LogLevel } from "@dxd/scraper";
 import { getStorage } from "@dxd/storage";
 import { db, sites, crawls, crawlLogs } from "./db.js";
 import fs from "node:fs/promises";
+import archiver from "archiver";
+import { Readable } from "node:stream";
 
 const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
 const storage = getStorage();
@@ -20,6 +22,57 @@ const workerConnection = new Redis(redisUrl, {
 interface CrawlJobData {
   siteId: string;
   crawlId: string;
+}
+
+function getArchivePath(outputPath: string): string {
+  return `${outputPath}.zip`;
+}
+
+async function createPrebuiltArchive(crawlId: string, outputPath: string): Promise<string> {
+  const archivePath = getArchivePath(outputPath);
+  const outputPrefix = `${outputPath}/`;
+  const files = (await storage.listFiles(outputPath)).filter((file) => file.startsWith(outputPrefix));
+
+  if (files.length === 0) {
+    throw new Error(`No files found to archive for crawl ${crawlId}`);
+  }
+
+  const archive = archiver("zip", { zlib: { level: 9 } });
+
+  archive.on("warning", (error) => {
+    console.warn("[Worker] Archive warning", {
+      crawlId,
+      outputPath,
+      error: error.message,
+    });
+  });
+
+  archive.on("error", (error) => {
+    console.error("[Worker] Archive error", {
+      crawlId,
+      outputPath,
+      error: error.message,
+    });
+  });
+
+  const archiveStream = Readable.toWeb(archive) as ReadableStream<Uint8Array>;
+  const writePromise = storage.writeStream(archivePath, archiveStream);
+
+  try {
+    for (const file of files) {
+      const relativePath = file.slice(outputPrefix.length);
+      const fileStream = storage.readStream(file);
+      archive.append(Readable.fromWeb(fileStream), { name: relativePath });
+    }
+
+    await archive.finalize();
+    await writePromise;
+    return archivePath;
+  } catch (error) {
+    await storage.deleteDir(archivePath).catch(() => undefined);
+    archive.destroy(error as Error);
+    throw error;
+  }
 }
 
 async function publishEvent(crawlId: string, event: object) {
@@ -121,6 +174,25 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
 
     // Calculate output size
     const outputSize = await storage.getSize(finalPath);
+
+    await publishEvent(crawlId, {
+      type: "log",
+      level: "info",
+      message: "Building ZIP archive for instant download",
+      timestamp: new Date().toISOString(),
+    });
+
+    try {
+      await createPrebuiltArchive(crawlId, finalPath);
+    } catch (error) {
+      console.error(`[Worker] Failed to prebuild archive: ${crawlId}`, error);
+      await publishEvent(crawlId, {
+        type: "log",
+        level: "warn",
+        message: `ZIP prebuild failed: ${(error as Error).message}. Download will fall back to on-demand ZIP generation.`,
+        timestamp: new Date().toISOString(),
+      });
+    }
 
     // Update crawl as completed
     await db

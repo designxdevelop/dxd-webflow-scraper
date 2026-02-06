@@ -50,6 +50,16 @@ export class S3Storage implements StorageAdapter {
     );
   }
 
+  async writeStream(filePath: string, stream: ReadableStream<Uint8Array>): Promise<void> {
+    await this.client.send(
+      new PutObjectCommand({
+        Bucket: this.config.bucket,
+        Key: filePath,
+        Body: Readable.fromWeb(stream as any),
+      })
+    );
+  }
+
   async readFile(filePath: string): Promise<Buffer> {
     const res = await this.client.send(
       new GetObjectCommand({

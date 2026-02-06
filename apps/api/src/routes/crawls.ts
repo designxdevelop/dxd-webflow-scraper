@@ -122,10 +122,35 @@ app.get("/:id/download", async (c) => {
   }
 
   const storage = getStorage();
+  const archivePath = `${crawl.outputPath}.zip`;
+  const siteName = crawl.site?.name || "archive";
+  const filename = `${siteName}-${crawl.id.slice(0, 8)}.zip`;
+
+  try {
+    const archiveExists = await storage.exists(archivePath);
+    if (archiveExists) {
+      return new Response(storage.readStream(archivePath), {
+        headers: {
+          "Content-Type": "application/zip",
+          "Content-Disposition": `attachment; filename="${filename}"`,
+        },
+      });
+    }
+  } catch (error) {
+    console.warn("[download] Failed to read prebuilt archive", {
+      crawlId: id,
+      archivePath,
+      error: (error as Error).message,
+    });
+  }
+
+  const outputPrefix = `${crawl.outputPath}/`;
   let files: string[] = [];
 
   try {
-    files = await storage.listFiles(crawl.outputPath);
+    files = (await storage.listFiles(crawl.outputPath)).filter((file) =>
+      file.startsWith(outputPrefix)
+    );
   } catch (error) {
     console.error("[download] Failed to list crawl files", {
       crawlId: id,
@@ -141,8 +166,6 @@ app.get("/:id/download", async (c) => {
 
   // Create zip archive
   const archive = archiver("zip", { zlib: { level: 9 } });
-  const siteName = crawl.site?.name || "archive";
-  const filename = `${siteName}-${crawl.id.slice(0, 8)}.zip`;
 
   archive.on("warning", (error) => {
     console.warn("[download] Archive warning", {
@@ -164,7 +187,7 @@ app.get("/:id/download", async (c) => {
   void (async () => {
     try {
       for (const file of files) {
-        const relativePath = file.replace(`${crawl.outputPath}/`, "");
+        const relativePath = file.slice(outputPrefix.length);
         const fileStream = storage.readStream(file);
         archive.append(Readable.fromWeb(fileStream), { name: relativePath });
       }

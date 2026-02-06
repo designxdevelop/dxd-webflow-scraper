@@ -1,5 +1,6 @@
 export interface StorageAdapter {
   writeFile(path: string, content: Buffer | string): Promise<void>;
+  writeStream(path: string, stream: ReadableStream<Uint8Array>): Promise<void>;
   readFile(path: string): Promise<Buffer>;
   readStream(path: string): ReadableStream<Uint8Array>;
   listFiles(prefix: string): Promise<string[]>;

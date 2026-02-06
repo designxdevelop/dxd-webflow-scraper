@@ -2,6 +2,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import type { StorageAdapter } from "./adapter.js";
 
 export class LocalStorage implements StorageAdapter {
@@ -11,6 +12,12 @@ export class LocalStorage implements StorageAdapter {
     const fullPath = path.join(this.basePath, filePath);
     await fsp.mkdir(path.dirname(fullPath), { recursive: true });
     await fsp.writeFile(fullPath, content);
+  }
+
+  async writeStream(filePath: string, stream: ReadableStream<Uint8Array>): Promise<void> {
+    const fullPath = path.join(this.basePath, filePath);
+    await fsp.mkdir(path.dirname(fullPath), { recursive: true });
+    await pipeline(Readable.fromWeb(stream as any), fs.createWriteStream(fullPath));
   }
 
   async readFile(filePath: string): Promise<Buffer> {

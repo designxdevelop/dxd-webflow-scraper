@@ -144,29 +144,44 @@ app.get("/:id/download", async (c) => {
   const siteName = crawl.site?.name || "archive";
   const filename = `${siteName}-${crawl.id.slice(0, 8)}.zip`;
 
-  c.header("Content-Type", "application/zip");
-  c.header("Content-Disposition", `attachment; filename="${filename}"`);
-
-  // Add files to archive
-  try {
-    for (const file of files) {
-      const content = await storage.readFile(file);
-      const relativePath = file.replace(`${crawl.outputPath}/`, "");
-      archive.append(content, { name: relativePath });
-    }
-  } catch (error) {
-    console.error("[download] Failed to read crawl file", {
+  archive.on("warning", (error) => {
+    console.warn("[download] Archive warning", {
       crawlId: id,
       outputPath: crawl.outputPath,
-      error: (error as Error).message,
+      error: error.message,
     });
-    return c.json({ error: "Failed to stream archive from storage" }, 500);
-  }
+  });
 
-  archive.finalize();
+  archive.on("error", (error) => {
+    console.error("[download] Archive error", {
+      crawlId: id,
+      outputPath: crawl.outputPath,
+      error: error.message,
+    });
+  });
+
+  // Build the zip in the background so headers are returned immediately.
+  void (async () => {
+    try {
+      for (const file of files) {
+        const relativePath = file.replace(`${crawl.outputPath}/`, "");
+        const fileStream = storage.readStream(file);
+        archive.append(Readable.fromWeb(fileStream), { name: relativePath });
+      }
+
+      await archive.finalize();
+    } catch (error) {
+      console.error("[download] Failed to stream crawl file", {
+        crawlId: id,
+        outputPath: crawl.outputPath,
+        error: (error as Error).message,
+      });
+      archive.destroy(error as Error);
+    }
+  })();
 
   // Convert archive to web stream
-  const webStream = Readable.toWeb(archive) as ReadableStream;
+  const webStream = Readable.toWeb(archive) as ReadableStream<Uint8Array>;
   return new Response(webStream, {
     headers: {
       "Content-Type": "application/zip",

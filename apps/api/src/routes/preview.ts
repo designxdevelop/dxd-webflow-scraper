@@ -8,27 +8,83 @@ import path from "node:path";
 const app = new Hono();
 
 /**
- * Inject a <base> tag into HTML to make absolute asset paths work.
- * The scraped HTML uses absolute paths like /css/style.css, /images/logo.png
- * but when served at /preview/{crawlId}/, these paths would 404.
- * The <base> tag tells the browser to resolve all URLs relative to the crawl path.
+ * Rewrite root-relative URLs (e.g. "/css/app.css") to include the preview prefix
+ * so archived assets resolve under /preview/{crawlId}/...
  */
-function injectBaseTag(html: string, basePath: string): string {
-  const baseTag = `<base href="${basePath}">`;
-
-  // Try to inject after <head> tag
-  if (html.includes("<head>")) {
-    return html.replace("<head>", `<head>\n    ${baseTag}`);
+function rewriteRootRelativeUrl(url: string, previewPrefix: string): string {
+  if (!url.startsWith("/") || url.startsWith("//")) {
+    return url;
   }
-
-  // Try to inject after <head ...> tag with attributes
-  const headMatch = html.match(/<head[^>]*>/i);
-  if (headMatch) {
-    return html.replace(headMatch[0], `${headMatch[0]}\n    ${baseTag}`);
+  if (url === previewPrefix || url.startsWith(`${previewPrefix}/`)) {
+    return url;
   }
+  return `${previewPrefix}${url}`;
+}
 
-  // Fallback: inject at the very beginning
-  return baseTag + html;
+function rewriteCssForPreview(css: string, crawlId: string): string {
+  const previewPrefix = `/preview/${crawlId}`;
+
+  return css
+    .replace(/url\(\s*(['"]?)(\/(?!\/)[^'")]+)\1\s*\)/gi, (_match, quote: string, url: string) => {
+      const rewritten = rewriteRootRelativeUrl(url, previewPrefix);
+      return `url(${quote}${rewritten}${quote})`;
+    })
+    .replace(/(@import\s+)(['"])(\/(?!\/)[^'"]+)\2/gi, (_match, prefix: string, quote: string, url: string) => {
+      const rewritten = rewriteRootRelativeUrl(url, previewPrefix);
+      return `${prefix}${quote}${rewritten}${quote}`;
+    })
+    .replace(
+      /(@import\s+url\(\s*)(['"]?)(\/(?!\/)[^'")]+)\2(\s*\))/gi,
+      (_match, start: string, quote: string, url: string, end: string) => {
+        const rewritten = rewriteRootRelativeUrl(url, previewPrefix);
+        return `${start}${quote}${rewritten}${quote}${end}`;
+      }
+    );
+}
+
+function rewriteSrcsetValue(srcset: string, previewPrefix: string): string {
+  return srcset
+    .split(",")
+    .map((candidate) => {
+      const trimmed = candidate.trim();
+      if (!trimmed) {
+        return trimmed;
+      }
+
+      const [url, ...rest] = trimmed.split(/\s+/);
+      const rewritten = rewriteRootRelativeUrl(url, previewPrefix);
+      return [rewritten, ...rest].join(" ");
+    })
+    .join(", ");
+}
+
+function rewriteHtmlForPreview(html: string, crawlId: string): string {
+  const previewPrefix = `/preview/${crawlId}`;
+
+  const rewrittenAttrs = html
+    .replace(
+      /(\s(?:href|src|action|poster|content)\s*=\s*)(["'])([^"']+)\2/gi,
+      (_match, prefix: string, quote: string, value: string) => {
+        const rewritten = rewriteRootRelativeUrl(value, previewPrefix);
+        return `${prefix}${quote}${rewritten}${quote}`;
+      }
+    )
+    .replace(/(\s(?:href|src|action|poster|content)\s*=\s*)(\/[^\s>]+)/gi, (_match, prefix: string, value: string) => {
+      const rewritten = rewriteRootRelativeUrl(value, previewPrefix);
+      return `${prefix}${rewritten}`;
+    })
+    .replace(/(\ssrcset\s*=\s*)(["'])([^"']+)\2/gi, (_match, prefix: string, quote: string, value: string) => {
+      const rewritten = rewriteSrcsetValue(value, previewPrefix);
+      return `${prefix}${quote}${rewritten}${quote}`;
+    })
+    .replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style>)/gi, (_match, start: string, css: string, end: string) => {
+      return `${start}${rewriteCssForPreview(css, crawlId)}${end}`;
+    })
+    .replace(/(\sstyle\s*=\s*)(["'])([\s\S]*?)\2/gi, (_match, prefix: string, quote: string, styleValue: string) => {
+      return `${prefix}${quote}${rewriteCssForPreview(styleValue, crawlId)}${quote}`;
+    });
+
+  return rewrittenAttrs;
 }
 
 // Serve preview files from storage
@@ -56,8 +112,7 @@ app.get("/:crawlId/*", async (c) => {
       const indexExists = await storage.exists(indexPath);
       if (indexExists) {
         let content = await storage.readFile(indexPath);
-        // Inject base tag for HTML files
-        const html = injectBaseTag(content.toString("utf-8"), `/preview/${crawlId}/`);
+        const html = rewriteHtmlForPreview(content.toString("utf-8"), crawlId);
         return new Response(html, {
           headers: {
             "Content-Type": "text/html; charset=utf-8",
@@ -70,10 +125,20 @@ app.get("/:crawlId/*", async (c) => {
     const content = await storage.readFile(fullPath);
     const contentType = getContentType(filePath);
 
-    // Inject base tag for HTML files so absolute asset paths work
+    // Rewrite root-relative URLs so absolute site paths resolve in previews
     if (contentType.includes("text/html")) {
-      const html = injectBaseTag(content.toString("utf-8"), `/preview/${crawlId}/`);
+      const html = rewriteHtmlForPreview(content.toString("utf-8"), crawlId);
       return new Response(html, {
+        headers: {
+          "Content-Type": contentType,
+          "Cache-Control": "public, max-age=3600",
+        },
+      });
+    }
+
+    if (contentType.includes("text/css")) {
+      const css = rewriteCssForPreview(content.toString("utf-8"), crawlId);
+      return new Response(css, {
         headers: {
           "Content-Type": contentType,
           "Cache-Control": "public, max-age=3600",

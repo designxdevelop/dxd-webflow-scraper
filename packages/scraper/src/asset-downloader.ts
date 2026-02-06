@@ -12,6 +12,7 @@ type CategoryDir = Record<AssetCategory, string>;
 
 export class AssetDownloader {
   private cache = new Map<string, string>();
+  private directPathCache = new Map<string, string>();
   private dirs: CategoryDir;
 
   constructor(private outputDir: string) {
@@ -82,6 +83,50 @@ export class AssetDownloader {
 
   async rewriteInlineCss(css: string, baseUrl: string): Promise<string> {
     return this.rewriteCssUrls(css, baseUrl);
+  }
+
+  async downloadAssetToPath(assetUrl: string, relativePath: string): Promise<string> {
+    const normalized = this.normalizeUrl(assetUrl);
+    if (!normalized) return assetUrl;
+
+    if (!this.shouldDownloadUrl(normalized)) {
+      return normalized;
+    }
+
+    const safeRelativePath = sanitizeRelativePath(relativePath);
+    const cacheKey = `${normalized}::${safeRelativePath}`;
+    if (this.directPathCache.has(cacheKey)) {
+      return this.directPathCache.get(cacheKey)!;
+    }
+
+    const res = await fetch(normalized, {
+      redirect: "follow",
+      headers: {
+        "user-agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+        accept: "*/*",
+      },
+    });
+
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+
+    const diskPath = path.join(this.outputDir, safeRelativePath);
+    await fs.ensureDir(path.dirname(diskPath));
+    await fs.writeFile(diskPath, Buffer.from(await res.arrayBuffer()));
+
+    const webPath = `/${safeRelativePath}`;
+    this.directPathCache.set(cacheKey, webPath);
+    return webPath;
+  }
+
+  async writeTextAssetAtPath(relativePath: string, content: string): Promise<string> {
+    const safeRelativePath = sanitizeRelativePath(relativePath);
+    const diskPath = path.join(this.outputDir, safeRelativePath);
+    await fs.ensureDir(path.dirname(diskPath));
+    await fs.writeFile(diskPath, content, "utf8");
+    return `/${safeRelativePath}`;
   }
 
   private async writeTextAsset(
@@ -566,6 +611,14 @@ function isLikelyAssetPath(value: string): boolean {
 function truncateForLog(value: string, maxLength = 120): string {
   if (value.length <= maxLength) return value;
   return `${value.slice(0, maxLength)}…`;
+}
+
+function sanitizeRelativePath(relativePath: string): string {
+  const normalized = path.posix.normalize(relativePath).replace(/^\/+/, "");
+  if (!normalized || normalized === "." || normalized.startsWith("../")) {
+    throw new Error(`Invalid relative path: ${relativePath}`);
+  }
+  return normalized;
 }
 
 function mimeTypeToExt(contentType: string | null): string | undefined {

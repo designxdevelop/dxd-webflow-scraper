@@ -1,5 +1,7 @@
 import { load, CheerioAPI, Cheerio } from "cheerio";
+import path from "node:path";
 import { AssetDownloader } from "./asset-downloader.js";
+import { log } from "./logger.js";
 
 interface RewriteOptions {
   html: string;
@@ -17,6 +19,7 @@ export async function rewriteHtmlDocument(options: RewriteOptions): Promise<stri
   }
   normalizeCloudflareScripts($);
   normalizeLazyMedia($);
+  await processCodeIslands($, pageUrl, assets);
 
   await processStylesheets($, pageUrl, assets);
   await processScripts($, pageUrl, assets);
@@ -310,6 +313,233 @@ async function processIframes($: CheerioAPI, pageUrl: string, assets: AssetDownl
       })
       .get()
   );
+}
+
+async function processCodeIslands($: CheerioAPI, pageUrl: string, assets: AssetDownloader) {
+  const islands = $("code-island[data-loader]");
+  if (!islands.length) return;
+
+  const moduleCache = new Map<string, string>();
+
+  await Promise.all(
+    islands
+      .map(async (_, el) => {
+        const $el = $(el);
+        const rawLoader = $el.attr("data-loader");
+        if (!rawLoader) return;
+
+        const parsed = parseJsonAttribute(rawLoader);
+        if (!isRecord(parsed) || parsed.tag !== "FEDERATION") return;
+
+        const val = asRecord(parsed.val);
+        const clientModuleUrlValue = asString(val?.clientModuleUrl);
+        if (!clientModuleUrlValue || !val) return;
+
+        const clientModuleUrl = absoluteUrl(clientModuleUrlValue, pageUrl);
+        if (!clientModuleUrl) return;
+
+        try {
+          let localClientModuleUrl = moduleCache.get(clientModuleUrl);
+          if (!localClientModuleUrl) {
+            localClientModuleUrl = await mirrorFederatedModule(clientModuleUrl, assets);
+            moduleCache.set(clientModuleUrl, localClientModuleUrl);
+          }
+
+          val.clientModuleUrl = localClientModuleUrl;
+          $el.attr("data-loader", JSON.stringify(parsed));
+        } catch (error) {
+          log.warn(
+            `Failed to mirror code component module ${clientModuleUrl}: ${(error as Error).message}`,
+            clientModuleUrl
+          );
+        }
+      })
+      .get()
+  );
+}
+
+async function mirrorFederatedModule(clientModuleUrl: string, assets: AssetDownloader): Promise<string> {
+  const { moduleBaseDir, modulePublicPath, loaderFileName } = getModulePaths(clientModuleUrl);
+  const localLoaderPath = path.posix.join(moduleBaseDir, loaderFileName);
+
+  const wfManifest = await fetchJson(clientModuleUrl);
+  await assets.writeTextAssetAtPath(localLoaderPath, JSON.stringify(wfManifest));
+
+  const entryRef = asString(wfManifest.entry) || "mf-manifest.json";
+  const entryUrl = new URL(entryRef, clientModuleUrl).toString();
+  const entryFileName = getUrlFileName(entryUrl, "mf-manifest.json");
+  const localEntryPath = path.posix.join(moduleBaseDir, entryFileName);
+
+  const mfManifest = await fetchJson(entryUrl);
+  patchFederationManifestPublicPath(mfManifest, modulePublicPath);
+
+  const assetRefs = collectFederationAssetRefs(mfManifest);
+  for (const assetRef of assetRefs) {
+    const absoluteAssetUrl = new URL(assetRef, entryUrl).toString();
+    const localAssetPath = getLocalFederationAssetPath(moduleBaseDir, assetRef, absoluteAssetUrl);
+    await assets.downloadAssetToPath(absoluteAssetUrl, localAssetPath);
+  }
+
+  await assets.writeTextAssetAtPath(localEntryPath, JSON.stringify(mfManifest));
+  return `/${localLoaderPath}`;
+}
+
+function collectFederationAssetRefs(manifest: Record<string, unknown>): string[] {
+  const refs = new Set<string>();
+
+  const metaData = asRecord(manifest.metaData);
+  const remoteEntry = asRecord(metaData?.remoteEntry);
+  const remoteEntryName = asString(remoteEntry?.name);
+  const remoteEntryPath = asString(remoteEntry?.path) || "";
+  if (remoteEntryName) {
+    refs.add(path.posix.join(remoteEntryPath, remoteEntryName));
+  }
+
+  collectAssetRefsFromList(manifest.exposes, refs);
+  collectAssetRefsFromList(manifest.shared, refs);
+  collectAssetRefsFromList(manifest.remotes, refs);
+
+  return Array.from(refs);
+}
+
+function collectAssetRefsFromList(value: unknown, refs: Set<string>) {
+  if (!Array.isArray(value)) return;
+
+  for (const item of value) {
+    const itemRecord = asRecord(item);
+    const assets = asRecord(itemRecord?.assets);
+    if (!assets) continue;
+
+    collectStringRefs(asRecord(assets.js)?.sync, refs);
+    collectStringRefs(asRecord(assets.js)?.async, refs);
+    collectStringRefs(asRecord(assets.css)?.sync, refs);
+    collectStringRefs(asRecord(assets.css)?.async, refs);
+  }
+}
+
+function collectStringRefs(value: unknown, refs: Set<string>) {
+  if (!Array.isArray(value)) return;
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    const normalized = item.trim();
+    if (!normalized || normalized.startsWith("data:") || normalized.toLowerCase().startsWith("javascript:")) {
+      continue;
+    }
+    refs.add(normalized);
+  }
+}
+
+function patchFederationManifestPublicPath(manifest: Record<string, unknown>, localPublicPath: string) {
+  const metaData = asRecord(manifest.metaData);
+  if (metaData) {
+    metaData.publicPath = localPublicPath;
+  }
+}
+
+function getLocalFederationAssetPath(
+  moduleBaseDir: string,
+  assetRef: string,
+  absoluteAssetUrl: string
+): string {
+  const trimmed = assetRef.trim();
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    const filename = getUrlFileName(trimmed, "asset.bin");
+    return path.posix.join(moduleBaseDir, filename);
+  }
+
+  if (trimmed.startsWith("/")) {
+    return path.posix.join(moduleBaseDir, trimmed.replace(/^\/+/, ""));
+  }
+
+  if (trimmed.startsWith("./")) {
+    return path.posix.join(moduleBaseDir, trimmed.slice(2));
+  }
+
+  return path.posix.join(moduleBaseDir, trimmed || getUrlFileName(absoluteAssetUrl, "asset.bin"));
+}
+
+function getModulePaths(clientModuleUrl: string): {
+  moduleBaseDir: string;
+  modulePublicPath: string;
+  loaderFileName: string;
+} {
+  const parsed = new URL(clientModuleUrl);
+  const decodedPathname = safeDecodeURIComponent(parsed.pathname).replace(/^\/+/, "");
+  const loaderFileName = path.posix.basename(decodedPathname) || "wf-manifest.json";
+  const moduleDir = path.posix.dirname(decodedPathname);
+  const moduleBaseDir =
+    moduleDir && moduleDir !== "."
+      ? path.posix.join("code-components", parsed.hostname, moduleDir)
+      : path.posix.join("code-components", parsed.hostname);
+
+  const modulePublicPath = `/${moduleBaseDir.replace(/\/+$/, "")}/`;
+  return { moduleBaseDir, modulePublicPath, loaderFileName };
+}
+
+function getUrlFileName(url: string, fallback: string): string {
+  try {
+    const parsed = new URL(url);
+    const decodedPathname = safeDecodeURIComponent(parsed.pathname);
+    const filename = path.posix.basename(decodedPathname);
+    return filename || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+async function fetchJson(url: string): Promise<Record<string, unknown>> {
+  const response = await fetch(url, {
+    redirect: "follow",
+    headers: {
+      "user-agent":
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+      accept: "application/json, text/plain, */*",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+
+  const text = await response.text();
+  const parsed = JSON.parse(text);
+  if (!isRecord(parsed)) {
+    throw new Error("Invalid JSON response shape");
+  }
+  return parsed;
+}
+
+function parseJsonAttribute(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    try {
+      return JSON.parse(value.replace(/&quot;/g, '"').replace(/&amp;/g, "&"));
+    } catch {
+      return null;
+    }
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return isRecord(value) ? value : null;
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
 }
 
 async function processInlineStyles($: CheerioAPI, pageUrl: string, assets: AssetDownloader) {

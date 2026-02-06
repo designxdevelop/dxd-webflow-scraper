@@ -33,19 +33,29 @@ export function useCrawlLogs(crawlId: string | null): UseCrawlLogsResult {
       setLogs([]);
       setProgress(null);
       setConnected(false);
+      setError(null);
       return;
     }
 
+    // Ensure we don't carry over logs/progress from a previous crawl.
+    setLogs([]);
+    setProgress(null);
+    setConnected(false);
+    setError(null);
+
+    let isClosed = false;
     const eventSource = new EventSource(`${API_URL}/api/sse/crawls/${crawlId}`, {
       withCredentials: true,
     });
 
     eventSource.onopen = () => {
+      if (isClosed) return;
       setConnected(true);
       setError(null);
     };
 
     eventSource.onmessage = (event) => {
+      if (isClosed) return;
       try {
         const data = JSON.parse(event.data);
 
@@ -77,12 +87,14 @@ export function useCrawlLogs(crawlId: string | null): UseCrawlLogsResult {
     };
 
     eventSource.onerror = () => {
+      if (isClosed) return;
       setConnected(false);
       setError(new Error("Connection lost"));
       eventSource.close();
     };
 
     return () => {
+      isClosed = true;
       eventSource.close();
       setConnected(false);
     };

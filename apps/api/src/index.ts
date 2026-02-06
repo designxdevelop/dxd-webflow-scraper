@@ -12,10 +12,46 @@ import { sseRoutes } from "./routes/sse.js";
 import { previewRoutes } from "./routes/preview.js";
 
 const app = new Hono<{ Variables: AuthVariables }>();
-const frontendUrl = (process.env.FRONTEND_URL || "https://archiver.designxdevelop.com")
-  .replace(/^https\/\//, "https://")
-  .replace(/^http\/\//, "http://")
-  .replace(/\/+$/, "");
+const frontendUrl = (process.env.FRONTEND_URL || "https://archiver.designxdevelop.com").replace(
+  /\/+$/,
+  ""
+);
+const frontendOrigin = toOrigin(frontendUrl);
+const extraAllowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean)
+  .map(toOrigin)
+  .filter((origin): origin is string => Boolean(origin));
+
+function toOrigin(value: string): string | null {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
+}
+
+function isAllowedOrigin(origin?: string | null): origin is string {
+  if (!origin) {
+    return false;
+  }
+
+  if (frontendOrigin && origin === frontendOrigin) {
+    return true;
+  }
+
+  if (extraAllowedOrigins.includes(origin)) {
+    return true;
+  }
+
+  const allowedPatterns = [
+    /^http:\/\/localhost:\d+$/,
+    /^https:\/\/.*\.up\.railway\.app$/,
+    /^https:\/\/.*\.designxdevelop\.com$/,
+  ];
+  return allowedPatterns.some((pattern) => pattern.test(origin));
+}
 
 // Initialize Auth.js config
 app.use("*", initAuthConfig(getAuthConfig));
@@ -26,20 +62,25 @@ app.use(
   "*",
   cors({
     origin: (origin) => {
-      // Allow localhost for development, Railway subdomains, and custom domains
-      const allowedPatterns = [
-        /^http:\/\/localhost:\d+$/,
-        /^https:\/\/.*\.up\.railway\.app$/,
-        /^https:\/\/.*\.designxdevelop\.com$/,
-      ];
-      if (!origin || allowedPatterns.some((p) => p.test(origin))) {
-        return origin || "*";
+      if (isAllowedOrigin(origin)) {
+        return origin;
       }
       return null;
     },
     credentials: true,
   })
 );
+
+// Ensure SSE responses include CORS headers even for streamed/auth-failure responses.
+app.use("/api/sse/*", async (c, next) => {
+  const origin = c.req.header("origin");
+  if (isAllowedOrigin(origin)) {
+    c.header("Access-Control-Allow-Origin", origin);
+    c.header("Access-Control-Allow-Credentials", "true");
+    c.header("Vary", "Origin");
+  }
+  await next();
+});
 
 // Health check (public)
 app.get("/health", (c) => c.json({ status: "ok", timestamp: new Date().toISOString() }));

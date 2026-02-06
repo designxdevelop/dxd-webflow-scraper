@@ -9,6 +9,8 @@ const ALLOWED_DOMAIN = "designxdevelop.com";
 
 export function getAuthConfig(): AuthConfig {
   const isProduction = process.env.NODE_ENV === "production";
+  const frontendUrl = (process.env.FRONTEND_URL || "https://archiver.designxdevelop.com").replace(/\/+$/, "");
+  const frontendLoginUrl = `${frontendUrl}/login`;
 
   return {
     basePath: "/api/auth",
@@ -71,9 +73,6 @@ export function getAuthConfig(): AuthConfig {
         return session;
       },
       async redirect({ url, baseUrl }) {
-        // Allow redirects to the frontend domain
-        const frontendUrl = process.env.FRONTEND_URL || "https://archiver.designxdevelop.com";
-        
         // If the URL starts with the frontend domain, allow it
         if (url.startsWith(frontendUrl)) {
           return url;
@@ -87,8 +86,8 @@ export function getAuthConfig(): AuthConfig {
       },
     },
     pages: {
-      signIn: "/login",
-      error: "/login",
+      signIn: frontendLoginUrl,
+      error: frontendLoginUrl,
     },
     // API and web are on different Railway subdomains in production.
     // Cross-site requests require SameSite=None + Secure cookies.

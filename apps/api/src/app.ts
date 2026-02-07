@@ -112,6 +112,13 @@ export function createApp(config: AppConfig) {
   app.route("/api/settings", settingsRoutes);
   app.route("/api/sse", sseRoutes);
 
+  // Defense-in-depth: keep preview responses out of search indexes.
+  app.use("/preview/*", async (c, next) => {
+    await next();
+    c.res.headers.set("X-Robots-Tag", "noindex, nofollow, noarchive, nosnippet, noimageindex");
+    c.res.headers.set("Referrer-Policy", "no-referrer");
+  });
+
   // Preview routes (protected)
   app.use("/preview/*", requireAuth);
   app.route("/preview", previewRoutes);

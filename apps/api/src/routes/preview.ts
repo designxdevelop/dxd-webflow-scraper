@@ -4,6 +4,7 @@ import { crawls } from "../db/schema.js";
 import type { AppEnv } from "../env.js";
 
 const app = new Hono<AppEnv>();
+const PREVIEW_ROBOTS_DIRECTIVE = "noindex, nofollow, noarchive, nosnippet, noimageindex";
 
 const encodedClientModuleUrlPattern = new RegExp(
   `(clientModuleUrl(?:&quot;|")\\s*:\\s*(?:&quot;|"))(\\/(?!\\/)[^"&<]+)((?:&quot;|"))`,
@@ -72,7 +73,7 @@ function rewriteSrcsetValue(srcset: string, previewPrefix: string): string {
 function rewriteHtmlForPreview(html: string, crawlId: string): string {
   const previewPrefix = `/preview/${crawlId}`;
 
-  return html
+  const rewritten = html
     .replace(
       /(\s(?:href|src|action|poster|content)\s*=\s*)(["'])([^"']+)\2/gi,
       (_match, prefix: string, quote: string, value: string) => {
@@ -102,6 +103,22 @@ function rewriteHtmlForPreview(html: string, crawlId: string): string {
       const rewritten = rewriteRootRelativeUrl(value, `/preview/${crawlId}`);
       return `${prefix}${rewritten}${suffix}`;
     });
+
+  if (/<meta\s+name=["']robots["']/i.test(rewritten)) {
+    return rewritten.replace(
+      /<meta\s+name=["']robots["'][^>]*>/i,
+      `<meta name="robots" content="${PREVIEW_ROBOTS_DIRECTIVE}">`
+    );
+  }
+
+  if (/<head\b[^>]*>/i.test(rewritten)) {
+    return rewritten.replace(
+      /<head\b[^>]*>/i,
+      (headTag) => `${headTag}<meta name="robots" content="${PREVIEW_ROBOTS_DIRECTIVE}">`
+    );
+  }
+
+  return `<meta name="robots" content="${PREVIEW_ROBOTS_DIRECTIVE}">${rewritten}`;
 }
 
 function rewriteJsonForPreview(json: string, crawlId: string): string {
@@ -164,6 +181,20 @@ app.get("/:crawlId/*", async (c) => {
   const storage = c.get("storage");
   const crawlId = c.req.param("crawlId");
   const filePath = c.req.path.replace(`/preview/${crawlId}/`, "") || "index.html";
+  const previewResponseHeaders = {
+    "X-Robots-Tag": PREVIEW_ROBOTS_DIRECTIVE,
+    "Referrer-Policy": "no-referrer",
+  };
+
+  if (filePath === "robots.txt") {
+    return new Response("User-agent: *\nDisallow: /\n", {
+      headers: {
+        ...previewResponseHeaders,
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-store",
+      },
+    });
+  }
 
   const crawl = await db.query.crawls.findFirst({
     where: eq(crawls.id, crawlId),
@@ -186,6 +217,7 @@ app.get("/:crawlId/*", async (c) => {
         const html = rewriteHtmlForPreview(content.toString("utf-8"), crawlId);
         return new Response(html, {
           headers: {
+            ...previewResponseHeaders,
             "Content-Type": "text/html; charset=utf-8",
             "Cache-Control": "no-store",
           },
@@ -200,26 +232,34 @@ app.get("/:crawlId/*", async (c) => {
     if (contentType.includes("text/html")) {
       const html = rewriteHtmlForPreview(content.toString("utf-8"), crawlId);
       return new Response(html, {
-        headers: { "Content-Type": contentType, "Cache-Control": "no-store" },
+        headers: { ...previewResponseHeaders, "Content-Type": contentType, "Cache-Control": "no-store" },
       });
     }
 
     if (contentType.includes("text/css")) {
       const css = rewriteCssForPreview(content.toString("utf-8"), crawlId);
       return new Response(css, {
-        headers: { "Content-Type": contentType, "Cache-Control": "public, max-age=3600" },
+        headers: {
+          ...previewResponseHeaders,
+          "Content-Type": contentType,
+          "Cache-Control": "public, max-age=3600",
+        },
       });
     }
 
     if (contentType.includes("application/json")) {
       const json = rewriteJsonForPreview(content.toString("utf-8"), crawlId);
       return new Response(json, {
-        headers: { "Content-Type": contentType, "Cache-Control": "no-store" },
+        headers: { ...previewResponseHeaders, "Content-Type": contentType, "Cache-Control": "no-store" },
       });
     }
 
     return new Response(new Uint8Array(content), {
-      headers: { "Content-Type": contentType, "Cache-Control": "public, max-age=3600" },
+      headers: {
+        ...previewResponseHeaders,
+        "Content-Type": contentType,
+        "Cache-Control": "public, max-age=3600",
+      },
     });
   } catch (error) {
     if (isMissingFileError(error)) {

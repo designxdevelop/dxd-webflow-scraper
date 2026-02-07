@@ -13,13 +13,131 @@ interface PageProcessorOptions {
   outputDir: string;
   assets: AssetDownloader;
   removeWebflowBadge?: boolean;
+  /** Try fetch+Cheerio static path before falling back to Playwright. Defaults to true. */
+  tryStaticFirst?: boolean;
+  /** Optimise dynamic triggers for sitemap-only mode (reduced waits). Defaults to true. */
+  sitemapOnly?: boolean;
   signal?: AbortSignal;
   shouldAbort?: () => boolean | Promise<boolean>;
   onProgress?: (progress: Partial<CrawlProgress>) => void | Promise<void>;
 }
 
+/**
+ * Scan raw HTML for indicators that the page requires JavaScript execution
+ * (Playwright) to render correctly. If none are found, the page can be
+ * processed via the much faster static fetch+Cheerio path.
+ */
+export function detectDynamicContent(html: string): DynamicContentDetection {
+  const reasons: string[] = [];
+
+  // Federated module elements that need JS execution to render
+  if (/<code-island[\s>]/i.test(html)) {
+    reasons.push("code-island");
+  }
+
+  // webpack / rspack chunk runtime globals in inline scripts
+  if (/webpackChunk\w*\s*[=\[]/.test(html) || /rspackChunk\w*\s*[=\[]/.test(html)) {
+    reasons.push("chunk-runtime");
+  }
+
+  // __webpack_require__ usage
+  if (/__webpack_require__/.test(html)) {
+    reasons.push("webpack-require");
+  }
+
+  // Dynamic import() inside inline <script> blocks (not in src attributes)
+  const inlineScriptPattern = /<script(?![^>]*\bsrc\b)[^>]*>([\s\S]*?)<\/script>/gi;
+  let scriptMatch: RegExpExecArray | null;
+  while ((scriptMatch = inlineScriptPattern.exec(html)) !== null) {
+    if (/\bimport\s*\(/.test(scriptMatch[1])) {
+      reasons.push("dynamic-import");
+      break;
+    }
+  }
+
+  // Lazy-loaded media that requires scroll/interaction triggers
+  if (/\bdata-src\s*=/.test(html) || /\bdata-srcset\s*=/.test(html) || /\bdata-bg\s*=/.test(html)) {
+    reasons.push("lazy-media");
+  }
+
+  return { isDynamic: reasons.length > 0, reasons };
+}
+
+/**
+ * Attempt to process a page without Playwright by fetching static HTML and
+ * running it through the Cheerio-based rewriter pipeline. Returns null when
+ * the page requires dynamic processing so the caller can fall back to
+ * Playwright.
+ */
+async function tryStaticPath(options: PageProcessorOptions): Promise<PageResult | null> {
+  const { url, outputDir, assets, removeWebflowBadge = true, signal } = options;
+
+  // Combine the crawl's abort signal with a 10-second timeout so that
+  // cancellation requests propagate into the static-path fetch.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+
+  const onParentAbort = () => controller.abort();
+  if (signal?.aborted) return null;
+  signal?.addEventListener("abort", onParentAbort, { once: true });
+
+  try {
+    const res = await fetch(url, {
+      redirect: "follow",
+      headers: {
+        "user-agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+        accept: "text/html,application/xhtml+xml,*/*",
+      },
+      signal: controller.signal,
+    });
+
+    if (!res.ok) return null;
+
+    const contentType = res.headers.get("content-type") ?? "";
+    if (!contentType.includes("text/html") && !contentType.includes("application/xhtml")) {
+      return null;
+    }
+
+    const html = await res.text();
+    const detection = detectDynamicContent(html);
+
+    if (detection.isDynamic) {
+      log.debug(
+        `Page ${url} has dynamic content (${detection.reasons.join(", ")}), using Playwright`,
+        url,
+      );
+      return null;
+    }
+
+    log.debug(`Page ${url} is static, using fast path`, url);
+
+    const rewritten = await rewriteHtmlDocument({ html, pageUrl: url, assets, removeWebflowBadge });
+    const relativePath = buildRelativeFilePath(url);
+    const diskPath = path.join(outputDir, relativePath);
+    await fs.ensureDir(path.dirname(diskPath));
+    await fs.writeFile(diskPath, rewritten, "utf8");
+
+    return { relativePath, html, static: true };
+  } catch {
+    // Static path failed (timeout, network error, etc.) — fall back to Playwright
+    return null;
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", onParentAbort);
+  }
+}
+
 export async function processPage(options: PageProcessorOptions): Promise<PageResult> {
   const { url, context, outputDir, assets, removeWebflowBadge = true, signal, shouldAbort } = options;
+  const tryStatic = options.tryStaticFirst !== false;
+  const sitemapOnly = options.sitemapOnly !== false;
+
+  // --- Static fast-path attempt ---
+  if (tryStatic) {
+    const staticResult = await tryStaticPath(options);
+    if (staticResult) return staticResult;
+  }
 
   async function assertNotCancelled(): Promise<void> {
     if (signal?.aborted) {
@@ -92,7 +210,7 @@ export async function processPage(options: PageProcessorOptions): Promise<PageRe
 
     await assertNotCancelled();
     // Discover and download dynamic chunks
-    await triggerDynamicChunkLoading(page, url, requestedResources, resourceCategories);
+    await triggerDynamicChunkLoading(page, url, requestedResources, resourceCategories, sitemapOnly);
 
     // Download all captured resources
     const downloadPromises: Promise<void>[] = [];
@@ -121,7 +239,7 @@ export async function processPage(options: PageProcessorOptions): Promise<PageRe
     await fs.writeFile(diskPath, rewritten, "utf8");
 
     // Return both the path and original HTML for link discovery
-    return { relativePath, html };
+    return { relativePath, html, static: false };
   } finally {
     await page.close();
   }
@@ -137,7 +255,8 @@ async function triggerDynamicChunkLoading(
   page: Awaited<ReturnType<BrowserContext["newPage"]>>,
   pageUrl: string,
   requestedResources: Set<string>,
-  resourceCategories: Map<string, AssetCategory>
+  resourceCategories: Map<string, AssetCategory>,
+  sitemapOnly: boolean = true,
 ): Promise<void> {
   const pageParsed = new URL(pageUrl);
 
@@ -245,22 +364,26 @@ async function triggerDynamicChunkLoading(
   }
 
   // Strategy 3: Scroll the page to trigger lazy loading
-  await page.evaluate(async () => {
+  // In sitemapOnly mode, scroll in larger steps for speed.
+  const scrollDivisor = sitemapOnly ? 2 : 1;
+  await page.evaluate(async (divisor: number) => {
     const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     const scrollHeight = document.documentElement.scrollHeight;
     const viewportHeight = window.innerHeight;
-    const steps = Math.ceil(scrollHeight / viewportHeight);
+    const steps = Math.ceil(scrollHeight / (viewportHeight * divisor));
 
     for (let i = 0; i <= steps; i++) {
-      window.scrollTo(0, i * viewportHeight);
+      window.scrollTo(0, i * viewportHeight * divisor);
       await delay(100);
     }
 
     window.scrollTo(0, 0);
-  });
+  }, scrollDivisor);
 
   // Strategy 4: Hover over interactive elements to trigger lazy imports
-  await page.evaluate(async () => {
+  // In sitemapOnly mode, hover fewer elements.
+  const hoverLimit = sitemapOnly ? 10 : 20;
+  await page.evaluate(async (limit: number) => {
     const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     const interactiveSelectors = [
       "a[href]",
@@ -273,7 +396,7 @@ async function triggerDynamicChunkLoading(
     ];
 
     const elements = document.querySelectorAll(interactiveSelectors.join(","));
-    const sample = Array.from(elements).slice(0, 20);
+    const sample = Array.from(elements).slice(0, limit);
     for (const el of sample) {
       try {
         el.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
@@ -282,10 +405,10 @@ async function triggerDynamicChunkLoading(
         // Ignore errors
       }
     }
-  });
+  }, hoverLimit);
 
-  // B5: Reduced post-scroll wait (was 1000ms)
-  await page.waitForTimeout(500);
+  // In sitemapOnly mode, use a shorter post-scroll wait (200ms vs 500ms).
+  await page.waitForTimeout(sitemapOnly ? 200 : 500);
 }
 
 function isValidAssetUrl(url: string): boolean {

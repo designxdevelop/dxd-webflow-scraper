@@ -4,6 +4,7 @@ import fs from "fs-extra";
 import { chromium, Browser, BrowserContext } from "playwright";
 import { fetchSitemapUrls } from "./sitemap-parser.js";
 import { AssetDownloader } from "./asset-downloader.js";
+import { AssetCache } from "./asset-cache.js";
 import { processPage } from "./page-processor.js";
 import { CrawlOptions, CrawlResult, CrawlState, CrawlProgress } from "./types.js";
 import { log, runWithLogCallback } from "./logger.js";
@@ -181,7 +182,16 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
       };
     }
 
-    const assetDownloader = new AssetDownloader(resolvedOutput, undefined, {
+    // Cross-crawl asset cache scoped by hostname for isolation
+    const cacheDir = options.assetCacheDir ?? path.join(
+      process.env.LOCAL_TEMP_PATH || "/tmp",
+      "dxd-asset-cache",
+      new URL(options.baseUrl).hostname,
+    );
+    const assetCache = new AssetCache(cacheDir);
+    await assetCache.init();
+
+    const assetDownloader = new AssetDownloader(resolvedOutput, assetCache, {
       downloadBlacklist: options.downloadBlacklist,
       globalDownloadBlacklist: options.globalDownloadBlacklist,
     });
@@ -194,7 +204,7 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
 
     // Resource calculation parameters (overrideable via env)
     const memoryBufferGB = readPositiveInt("CRAWL_MEMORY_BUFFER_GB", 15) / 10; // Default 1.5GB
-    const memoryMBPerPage = readPositiveInt("CRAWL_MEMORY_MB_PER_PAGE", 250);
+    const memoryMBPerPage = readPositiveInt("CRAWL_MEMORY_MB_PER_PAGE", 150);
     const memoryMBPerBrowser = readPositiveInt("CRAWL_MEMORY_MB_PER_BROWSER", 350);
 
     // Dynamic boost: override concurrency and browsers via env
@@ -244,8 +254,9 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
         Math.floor(Math.max(0.5, freeMemoryGB - memoryBufferGB) / memoryGBPerBrowser)
       );
       const maxBrowsersByCPU = Math.max(1, Math.floor(cpuCount));
+      const pagesPerBrowser = readPositiveInt("CRAWL_PAGES_PER_BROWSER", 6);
       const desiredBrowsers =
-        effectiveConcurrency >= 4 ? Math.max(2, Math.ceil(effectiveConcurrency / 3)) : 1;
+        effectiveConcurrency >= 4 ? Math.max(2, Math.ceil(effectiveConcurrency / pagesPerBrowser)) : 1;
 
       if (overrideBrowsers > 0) {
         numBrowsers = overrideBrowsers;
@@ -278,8 +289,18 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
     let nextIndex = 0;
 
     // B7: Link discovery support
-    const discoverLinks = options.discoverLinks ?? false;
+    const sitemapOnly = options.sitemapOnly !== false;
+    const discoverLinks = sitemapOnly ? false : (options.discoverLinks ?? false);
     const maxTotalUrls = options.maxPages ?? Infinity;
+    const staticFastPath = options.staticFastPath !== false;
+    let staticPageCount = 0;
+
+    if (sitemapOnly && options.discoverLinks) {
+      log.info("sitemapOnly mode enabled — link discovery disabled");
+    }
+    if (staticFastPath) {
+      log.info("Static fast-path enabled — pages without dynamic content will skip Playwright");
+    }
 
     function getNextUrl(): string | null {
       while (nextIndex < urlQueue.length) {
@@ -348,13 +369,15 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
 
               try {
                 // B3: Retry with exponential backoff
-                const { relativePath, html } = await withRetry(
+                const pageResult = await withRetry(
                   () => processPage({
                     url,
                     context,
                     outputDir: resolvedOutput,
                     assets: assetDownloader,
                     removeWebflowBadge: options.removeWebflowBadge ?? true,
+                    tryStaticFirst: staticFastPath,
+                    sitemapOnly,
                     shouldAbort: options.shouldAbort,
                     signal: options.signal,
                   }),
@@ -363,6 +386,11 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
                   url,
                   options.shouldAbort
                 );
+
+                const { relativePath, html } = pageResult;
+                if (pageResult.static) {
+                  staticPageCount += 1;
+                }
 
                 succeededCount += 1;
                 pendingSucceeded.push(url);
@@ -419,11 +447,26 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
     await writeOutputConfig(resolvedOutput, options.redirectsCsv);
     await reportProgress();
 
+    // Evict stale entries from the cross-crawl asset cache
+    await assetCache.evict();
+    const cacheStats = assetCache.getStats();
+    log.info(
+      `Asset cache: ${cacheStats.hits} hits, ${cacheStats.misses} misses (${cacheStats.hitRate} hit rate)`,
+    );
+
+    if (staticPageCount > 0) {
+      log.info(
+        `Static fast-path: ${staticPageCount}/${succeededCount} pages processed without Playwright`,
+      );
+    }
+
     return {
       total: Math.max(allPages.length, urlQueue.length),
       succeeded: succeededCount,
       failed: failedCount,
       durationMs: Date.now() - startedAt,
+      staticPages: staticPageCount,
+      cacheHitRate: cacheStats.hitRate,
     };
   });
 }

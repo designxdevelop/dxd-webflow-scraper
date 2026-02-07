@@ -35,11 +35,13 @@ function DashboardPage() {
   const { data: sitesData } = useQuery({
     queryKey: ["sites"],
     queryFn: sitesApi.list,
+    refetchInterval: 10000,
   });
 
   const { data: crawlsData } = useQuery({
     queryKey: ["crawls", { limit: 5 }],
     queryFn: () => crawlsApi.list({ limit: 5 }),
+    refetchInterval: 5000,
   });
 
   const sites = sitesData?.sites || [];

@@ -70,6 +70,7 @@ function SiteDetailPage() {
   const { data, isLoading, error } = useQuery({
     queryKey: ["sites", siteId],
     queryFn: () => sitesApi.get(siteId),
+    refetchInterval: 10000,
   });
 
   const [scheduleEnabled, setScheduleEnabled] = useState(false);

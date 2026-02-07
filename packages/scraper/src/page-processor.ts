@@ -3,7 +3,7 @@ import fs from "fs-extra";
 import { BrowserContext } from "playwright";
 import { AssetDownloader } from "./asset-downloader.js";
 import { rewriteHtmlDocument } from "./url-rewriter.js";
-import { AssetCategory, CrawlProgress, PageResult } from "./types.js";
+import { AssetCategory, CrawlProgress, DynamicContentDetection, PageResult } from "./types.js";
 import { log } from "./logger.js";
 
 interface PageProcessorOptions {

@@ -20,6 +20,7 @@ function SettingsPage() {
   const [formData, setFormData] = useState({
     defaultConcurrency: 5,
     defaultMaxPages: "",
+    globalDownloadBlacklist: "",
   });
 
   useEffect(() => {
@@ -27,6 +28,8 @@ function SettingsPage() {
       setFormData({
         defaultConcurrency: (data.settings.defaultConcurrency as number) || 5,
         defaultMaxPages: (data.settings.defaultMaxPages as string) || "",
+        globalDownloadBlacklist:
+          ((data.settings.globalDownloadBlacklist as string[]) || []).join("\n"),
       });
     }
   }, [data]);
@@ -42,7 +45,14 @@ function SettingsPage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    updateMutation.mutate(formData);
+    updateMutation.mutate({
+      defaultConcurrency: formData.defaultConcurrency,
+      defaultMaxPages: formData.defaultMaxPages,
+      globalDownloadBlacklist: formData.globalDownloadBlacklist
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0),
+    });
   };
 
   if (isLoading) {
@@ -100,6 +110,24 @@ function SettingsPage() {
               />
             </div>
           </div>
+        </div>
+
+        <div className="bg-card border border-border rounded-lg p-6 space-y-4">
+          <h2 className="text-lg font-semibold">Global Download Blacklist</h2>
+          <p className="text-sm text-muted-foreground">
+            One rule per line. Use a full URL or a URL prefix ending with <code>*</code>.
+          </p>
+          <textarea
+            value={formData.globalDownloadBlacklist}
+            onChange={(e) =>
+              setFormData({
+                ...formData,
+                globalDownloadBlacklist: e.target.value,
+              })
+            }
+            className="w-full min-h-40 px-3 py-2 border border-input rounded-md bg-background font-mono text-xs"
+            placeholder={"https://js.partnerstack.com/partnerstack.min.js\nhttps://cdn.taboola.com/resources/codeless/*"}
+          />
         </div>
 
         <div className="flex items-center justify-end gap-4">

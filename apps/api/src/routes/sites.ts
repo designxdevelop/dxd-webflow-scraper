@@ -8,6 +8,57 @@ import type { AppEnv } from "../env.js";
 
 const app = new Hono<AppEnv>();
 
+function isValidDownloadBlacklistRule(value: string): boolean {
+  if (!value || !value.trim()) {
+    return false;
+  }
+
+  const trimmed = value.trim();
+  const candidate = trimmed.endsWith("*") ? trimmed.slice(0, -1) : trimmed;
+  try {
+    // eslint-disable-next-line no-new
+    new URL(candidate);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeDownloadBlacklistRules(rules: string[] | null | undefined): string[] | undefined {
+  if (!rules) {
+    return undefined;
+  }
+
+  const normalized = new Set<string>();
+  for (const rule of rules) {
+    const trimmed = rule.trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    const isPrefix = trimmed.endsWith("*");
+    const candidate = isPrefix ? trimmed.slice(0, -1) : trimmed;
+    try {
+      const parsed = new URL(candidate);
+      parsed.hash = "";
+      if (!isPrefix) {
+        parsed.search = "";
+      }
+      normalized.add(isPrefix ? `${parsed.toString()}*` : parsed.toString());
+    } catch {
+      // Ignore invalid values
+    }
+  }
+
+  return Array.from(normalized);
+}
+
+const downloadBlacklistRuleSchema = z
+  .string()
+  .min(1)
+  .max(1000)
+  .refine(isValidDownloadBlacklistRule, "Expected a URL or URL prefix ending in *");
+
 // Validation schemas
 const createSiteSchema = z.object({
   name: z.string().min(1).max(255),
@@ -15,6 +66,7 @@ const createSiteSchema = z.object({
   concurrency: z.number().int().min(1).max(20).optional(),
   maxPages: z.number().int().min(1).optional().nullable(),
   excludePatterns: z.array(z.string()).optional(),
+  downloadBlacklist: z.array(downloadBlacklistRuleSchema).optional(),
   removeWebflowBadge: z.boolean().optional(),
   redirectsCsv: z.string().optional().nullable(),
   scheduleEnabled: z.boolean().optional(),
@@ -99,6 +151,7 @@ app.post("/", zValidator("json", createSiteSchema), async (c) => {
       concurrency: data.concurrency ?? 5,
       maxPages: data.maxPages,
       excludePatterns: data.excludePatterns,
+      downloadBlacklist: normalizeDownloadBlacklistRules(data.downloadBlacklist),
       removeWebflowBadge: data.removeWebflowBadge ?? true,
       redirectsCsv: data.redirectsCsv,
       scheduleEnabled,
@@ -134,6 +187,7 @@ app.patch("/:id", zValidator("json", updateSiteSchema), async (c) => {
     .update(sites)
     .set({
       ...data,
+      downloadBlacklist: normalizeDownloadBlacklistRules(data.downloadBlacklist),
       scheduleEnabled,
       scheduleCron,
       nextScheduledAt,

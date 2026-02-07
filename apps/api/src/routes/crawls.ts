@@ -2,9 +2,37 @@ import { Hono } from "hono";
 import { eq, desc, and } from "drizzle-orm";
 import { crawls, crawlLogs, sites } from "../db/schema.js";
 import { downloadZip } from "client-zip";
+import { z } from "zod";
+import { zValidator } from "@hono/zod-validator";
 import type { AppEnv } from "../env.js";
 
 const app = new Hono<AppEnv>();
+const DOWNLOAD_FAILURE_PATTERN = /(?:Could not|Failed to)\s+download\s+(https?:\/\/\S+)/i;
+
+function normalizeUrlForBlacklist(raw: string): string | null {
+  try {
+    const parsed = new URL(raw);
+    parsed.hash = "";
+    parsed.search = "";
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function extractFailedDownloadUrl(log: { message: string; url?: string | null }): string | null {
+  if (log.url) {
+    return normalizeUrlForBlacklist(log.url);
+  }
+
+  const match = DOWNLOAD_FAILURE_PATTERN.exec(log.message);
+  if (!match) {
+    return null;
+  }
+
+  const raw = match[1].replace(/[),.;]+$/, "");
+  return normalizeUrlForBlacklist(raw);
+}
 
 // List crawls with optional filters
 app.get("/", async (c) => {
@@ -74,6 +102,105 @@ app.get("/:id/logs", async (c) => {
 
   return c.json({ logs });
 });
+
+// Analyze failed downloads and return blacklist suggestions
+app.get("/:id/download-suggestions", async (c) => {
+  const db = c.get("db");
+  const id = c.req.param("id");
+  const minCount = Math.max(1, parseInt(c.req.query("minCount") || "3", 10));
+  const limit = Math.max(1, Math.min(25, parseInt(c.req.query("limit") || "10", 10)));
+
+  const crawl = await db.query.crawls.findFirst({
+    where: eq(crawls.id, id),
+    with: {
+      site: true,
+      logs: {
+        orderBy: desc(crawlLogs.createdAt),
+        limit: 1000,
+      },
+    },
+  });
+
+  if (!crawl) {
+    return c.json({ error: "Crawl not found" }, 404);
+  }
+
+  const counts = new Map<string, number>();
+  for (const log of crawl.logs) {
+    const failedUrl = extractFailedDownloadUrl(log);
+    if (!failedUrl) {
+      continue;
+    }
+    counts.set(failedUrl, (counts.get(failedUrl) ?? 0) + 1);
+  }
+
+  const existing = new Set((crawl.site?.downloadBlacklist ?? []).map((entry) => entry.trim()));
+  const suggestions = Array.from(counts.entries())
+    .filter(([, count]) => count >= minCount)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([url, count]) => ({
+      url,
+      count,
+      alreadyBlacklisted: existing.has(url),
+    }));
+
+  return c.json({
+    crawlId: crawl.id,
+    siteId: crawl.siteId,
+    totalDistinctFailures: counts.size,
+    suggestions,
+  });
+});
+
+const applyDownloadSuggestionsSchema = z.object({
+  urls: z.array(z.string().url()).min(1).max(200),
+});
+
+// Apply blacklist suggestions to the crawl's site
+app.post(
+  "/:id/download-suggestions/apply",
+  zValidator("json", applyDownloadSuggestionsSchema),
+  async (c) => {
+    const db = c.get("db");
+    const id = c.req.param("id");
+    const body = c.req.valid("json");
+
+    const crawl = await db.query.crawls.findFirst({
+      where: eq(crawls.id, id),
+      with: {
+        site: true,
+      },
+    });
+
+    if (!crawl || !crawl.siteId || !crawl.site) {
+      return c.json({ error: "Crawl or site not found" }, 404);
+    }
+
+    const normalizedIncoming = body.urls
+      .map((url) => normalizeUrlForBlacklist(url))
+      .filter((url): url is string => Boolean(url));
+
+    const merged = Array.from(
+      new Set([...(crawl.site.downloadBlacklist ?? []), ...normalizedIncoming])
+    );
+
+    const [site] = await db
+      .update(sites)
+      .set({
+        downloadBlacklist: merged,
+        updatedAt: new Date(),
+      })
+      .where(eq(sites.id, crawl.siteId))
+      .returning();
+
+    return c.json({
+      success: true,
+      added: merged.length - (crawl.site.downloadBlacklist?.length ?? 0),
+      site,
+    });
+  }
+);
 
 // Cancel a crawl
 app.post("/:id/cancel", async (c) => {

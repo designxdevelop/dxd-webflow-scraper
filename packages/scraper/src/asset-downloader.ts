@@ -10,16 +10,32 @@ const FONT_EXTS = new Set([".woff2", ".woff", ".ttf", ".otf", ".eot"]);
 const MEDIA_EXTS = new Set([".mp4", ".webm", ".mov", ".mp3", ".wav"]);
 
 type CategoryDir = Record<AssetCategory, string>;
+type AssetDownloaderOptions = {
+  downloadBlacklist?: string[];
+  globalDownloadBlacklist?: string[];
+};
+
+const DEFAULT_GLOBAL_DOWNLOAD_BLACKLIST = [
+  "https://js.partnerstack.com/partnerstack.min.js",
+  "https://cdn.taboola.com/resources/codeless/codeless-events.js",
+];
 
 export class AssetDownloader {
   private cache = new Map<string, string>();
   private directPathCache = new Map<string, string>();
   private dirs: CategoryDir;
+  private blacklist: string[];
+  private blacklistLogCache = new Set<string>();
   /** B6: Optional cross-crawl disk cache. */
   private diskCache: AssetCache | null;
 
-  constructor(private outputDir: string, diskCache?: AssetCache) {
+  constructor(private outputDir: string, diskCache?: AssetCache, options?: AssetDownloaderOptions) {
     this.diskCache = diskCache ?? null;
+    this.blacklist = normalizeBlacklist([
+      ...DEFAULT_GLOBAL_DOWNLOAD_BLACKLIST,
+      ...(options?.globalDownloadBlacklist ?? []),
+      ...(options?.downloadBlacklist ?? []),
+    ]);
     this.dirs = {
       css: path.join(outputDir, "css"),
       js: path.join(outputDir, "js"),
@@ -37,6 +53,12 @@ export class AssetDownloader {
   async downloadAsset(assetUrl: string, category: AssetCategory): Promise<string> {
     const normalized = this.normalizeUrl(assetUrl);
     if (!normalized) return assetUrl;
+
+    const blacklistedBy = this.matchBlacklistRule(normalized);
+    if (blacklistedBy) {
+      this.logBlacklistSkip(normalized, blacklistedBy);
+      return normalized;
+    }
 
     // Skip third-party tracking/analytics domains
     if (!this.shouldDownloadUrl(normalized)) {
@@ -109,6 +131,12 @@ export class AssetDownloader {
   async downloadAssetToPath(assetUrl: string, relativePath: string): Promise<string> {
     const normalized = this.normalizeUrl(assetUrl);
     if (!normalized) return assetUrl;
+
+    const blacklistedBy = this.matchBlacklistRule(normalized);
+    if (blacklistedBy) {
+      this.logBlacklistSkip(normalized, blacklistedBy);
+      return normalized;
+    }
 
     if (!this.shouldDownloadUrl(normalized)) {
       return normalized;
@@ -282,6 +310,8 @@ export class AssetDownloader {
         "heapanalytics.com",
         "fullstory.com",
         "clarity.ms",
+        "partnerstack.com",
+        "taboola.com",
       ];
 
       for (const blocked of blockedDomains) {
@@ -295,6 +325,38 @@ export class AssetDownloader {
     } catch {
       return false;
     }
+  }
+
+  private matchBlacklistRule(url: string): string | null {
+    if (this.blacklist.length === 0) {
+      return null;
+    }
+
+    const normalizedWithoutQuery = stripQuery(url);
+    for (const rule of this.blacklist) {
+      if (rule.endsWith("*")) {
+        const prefix = rule.slice(0, -1);
+        if (url.startsWith(prefix) || normalizedWithoutQuery.startsWith(prefix)) {
+          return rule;
+        }
+        continue;
+      }
+
+      if (url === rule || normalizedWithoutQuery === rule) {
+        return rule;
+      }
+    }
+
+    return null;
+  }
+
+  private logBlacklistSkip(url: string, rule: string): void {
+    const key = `${rule}::${url}`;
+    if (this.blacklistLogCache.has(key)) {
+      return;
+    }
+    this.blacklistLogCache.add(key);
+    log.info(`Skipping blacklisted download ${url} (rule: ${rule})`);
   }
 
   /**
@@ -618,6 +680,47 @@ function slugify(value: string): string {
     .replace(/^-+|-+$/g, "")
     .replace(/-{2,}/g, "-");
   return normalized || "asset";
+}
+
+function stripQuery(rawUrl: string): string {
+  try {
+    const parsed = new URL(rawUrl);
+    parsed.search = "";
+    return parsed.toString();
+  } catch {
+    return rawUrl;
+  }
+}
+
+function normalizeBlacklist(downloadBlacklist: string[]): string[] {
+  const normalized = new Set<string>();
+  for (const rule of downloadBlacklist) {
+    const trimmed = rule.trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    if (trimmed.endsWith("*")) {
+      const prefix = trimmed.slice(0, -1);
+      try {
+        const parsed = new URL(prefix);
+        parsed.hash = "";
+        normalized.add(`${parsed.toString()}*`);
+      } catch {
+        // Ignore invalid rules
+      }
+      continue;
+    }
+
+    try {
+      const parsed = new URL(trimmed);
+      parsed.hash = "";
+      normalized.add(stripQuery(parsed.toString()));
+    } catch {
+      // Ignore invalid rules
+    }
+  }
+  return Array.from(normalized);
 }
 
 function isLikelyAssetPath(value: string): boolean {

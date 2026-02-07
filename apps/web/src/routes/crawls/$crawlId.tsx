@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { crawlsApi } from "@/lib/api";
 import { useCrawlLogs } from "@/lib/hooks/useCrawlLogs";
-import { ArrowLeft, Download, ExternalLink, XCircle, Wifi, WifiOff } from "lucide-react";
+import { ArrowLeft, Download, ExternalLink, XCircle, Wifi, WifiOff, Ban } from "lucide-react";
 import { useEffect, useRef } from "react";
 
 export const Route = createFileRoute("/crawls/$crawlId")({
@@ -30,6 +30,27 @@ function CrawlDetailPage() {
     mutationFn: () => crawlsApi.cancel(crawlId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["crawls", crawlId] });
+    },
+  });
+
+  const suggestionQuery = useQuery({
+    queryKey: ["crawls", crawlId, "download-suggestions"],
+    queryFn: () => crawlsApi.getDownloadSuggestions(crawlId, { minCount: 3, limit: 8 }),
+    enabled:
+      data?.crawl?.status === "completed" ||
+      data?.crawl?.status === "failed" ||
+      data?.crawl?.status === "cancelled",
+  });
+
+  const applySuggestionsMutation = useMutation({
+    mutationFn: (urls: string[]) => crawlsApi.applyDownloadSuggestions(crawlId, urls),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["crawls", crawlId, "download-suggestions"] });
+      queryClient.invalidateQueries({ queryKey: ["crawls", crawlId] });
+      if (data?.crawl?.siteId) {
+        queryClient.invalidateQueries({ queryKey: ["sites", data.crawl.siteId] });
+      }
+      queryClient.invalidateQueries({ queryKey: ["sites"] });
     },
   });
 
@@ -198,6 +219,58 @@ function CrawlDetailPage() {
             <div className="bg-card border border-border rounded-lg p-4">
               <h3 className="text-sm font-medium mb-2">Current URL</h3>
               <p className="text-sm text-muted-foreground truncate">{progress.currentUrl}</p>
+            </div>
+          )}
+
+          {suggestionQuery.data?.suggestions && suggestionQuery.data.suggestions.length > 0 && (
+            <div className="bg-card border border-border rounded-lg p-4 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-sm font-medium">Download Blacklist Suggestions</h3>
+                <button
+                  type="button"
+                  disabled={applySuggestionsMutation.isPending}
+                  onClick={() => {
+                    const urls = suggestionQuery.data!.suggestions
+                      .filter((suggestion) => !suggestion.alreadyBlacklisted)
+                      .map((suggestion) => suggestion.url);
+                    if (urls.length > 0) {
+                      applySuggestionsMutation.mutate(urls);
+                    }
+                  }}
+                  className="text-xs px-2 py-1 border border-border rounded-md hover:bg-muted disabled:opacity-50"
+                >
+                  Blacklist All
+                </button>
+              </div>
+
+              <p className="text-xs text-muted-foreground">
+                Repeated failed downloads were detected. Add them to this site&apos;s blacklist so
+                future crawls skip them.
+              </p>
+
+              <div className="space-y-2">
+                {suggestionQuery.data.suggestions.map((suggestion) => (
+                  <div key={suggestion.url} className="border border-border rounded-md p-2">
+                    <div className="text-xs text-muted-foreground mb-1">
+                      {suggestion.count} failed attempts
+                    </div>
+                    <p className="text-xs break-all mb-2">{suggestion.url}</p>
+                    {suggestion.alreadyBlacklisted ? (
+                      <span className="text-xs text-green-700">Already blacklisted</span>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={applySuggestionsMutation.isPending}
+                        onClick={() => applySuggestionsMutation.mutate([suggestion.url])}
+                        className="text-xs inline-flex items-center gap-1 px-2 py-1 border border-border rounded-md hover:bg-muted disabled:opacity-50"
+                      >
+                        <Ban size={12} />
+                        Blacklist URL
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>

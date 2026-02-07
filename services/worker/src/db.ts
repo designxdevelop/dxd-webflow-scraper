@@ -21,6 +21,7 @@ export const sites = pgTable("sites", {
   concurrency: integer("concurrency").default(5),
   maxPages: integer("max_pages"),
   excludePatterns: text("exclude_patterns").array(),
+  downloadBlacklist: text("download_blacklist").array(),
   removeWebflowBadge: boolean("remove_webflow_badge").default(true),
   redirectsCsv: text("redirects_csv"),
   scheduleEnabled: boolean("schedule_enabled").default(false),
@@ -56,6 +57,12 @@ export const crawlLogs = pgTable("crawl_logs", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 
+export const settings = pgTable("settings", {
+  key: varchar("key", { length: 100 }).primaryKey(),
+  value: jsonb("value").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
 // Relations
 export const sitesRelations = relations(sites, ({ many }) => ({
   crawls: many(crawls),
@@ -77,5 +84,5 @@ if (!connectionString) {
 
 const client = postgres(connectionString);
 export const db = drizzle(client, {
-  schema: { sites, crawls, crawlLogs, sitesRelations, crawlsRelations },
+  schema: { sites, crawls, crawlLogs, settings, sitesRelations, crawlsRelations },
 });

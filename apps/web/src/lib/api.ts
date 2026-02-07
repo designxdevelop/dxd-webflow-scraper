@@ -20,6 +20,7 @@ export interface Site {
   concurrency: number | null;
   maxPages: number | null;
   excludePatterns: string[] | null;
+  downloadBlacklist: string[] | null;
   removeWebflowBadge: boolean | null;
   redirectsCsv: string | null;
   scheduleEnabled: boolean | null;
@@ -63,6 +64,7 @@ export interface CreateSiteInput {
   concurrency?: number;
   maxPages?: number | null;
   excludePatterns?: string[];
+  downloadBlacklist?: string[];
   removeWebflowBadge?: boolean;
   redirectsCsv?: string | null;
   scheduleEnabled?: boolean;
@@ -70,6 +72,12 @@ export interface CreateSiteInput {
 }
 
 export interface UpdateSiteInput extends Partial<CreateSiteInput> {}
+
+export interface DownloadSuggestion {
+  url: string;
+  count: number;
+  alreadyBlacklisted: boolean;
+}
 
 // Sites API
 export const sitesApi = {
@@ -155,6 +163,38 @@ export const crawlsApi = {
 
   getPreviewUrl: (id: string): string => {
     return `${API_URL}/preview/${id}/`;
+  },
+
+  getDownloadSuggestions: async (
+    id: string,
+    params?: { minCount?: number; limit?: number }
+  ): Promise<{
+    crawlId: string;
+    siteId: string | null;
+    totalDistinctFailures: number;
+    suggestions: DownloadSuggestion[];
+  }> => {
+    const searchParams = new URLSearchParams();
+    if (params?.minCount) searchParams.set("minCount", params.minCount.toString());
+    if (params?.limit) searchParams.set("limit", params.limit.toString());
+
+    const url = `${API_BASE}/crawls/${id}/download-suggestions${searchParams.toString() ? `?${searchParams}` : ""}`;
+    const res = await fetchWithAuth(url);
+    if (!res.ok) throw new Error("Failed to fetch download suggestions");
+    return res.json();
+  },
+
+  applyDownloadSuggestions: async (
+    id: string,
+    urls: string[]
+  ): Promise<{ success: boolean; added: number; site: Site }> => {
+    const res = await fetchWithAuth(`${API_BASE}/crawls/${id}/download-suggestions/apply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ urls }),
+    });
+    if (!res.ok) throw new Error("Failed to apply download suggestions");
+    return res.json();
   },
 };
 

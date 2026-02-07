@@ -181,7 +181,10 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
       };
     }
 
-    const assetDownloader = new AssetDownloader(resolvedOutput);
+    const assetDownloader = new AssetDownloader(resolvedOutput, undefined, {
+      downloadBlacklist: options.downloadBlacklist,
+      globalDownloadBlacklist: options.globalDownloadBlacklist,
+    });
     await assetDownloader.init();
 
     const freeMemoryGB = os.freemem() / 1024 ** 3;

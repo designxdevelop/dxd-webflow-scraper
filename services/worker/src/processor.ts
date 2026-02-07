@@ -3,7 +3,7 @@ import Redis from "ioredis";
 import { eq, and, inArray, lte } from "drizzle-orm";
 import { crawlSite, type CrawlProgress, type LogLevel } from "@dxd/scraper";
 import { getStorage } from "@dxd/storage";
-import { db, sites, crawls, crawlLogs } from "./db.js";
+import { db, sites, crawls, crawlLogs, settings } from "./db.js";
 import fs from "node:fs/promises";
 import archiver from "archiver";
 import { Readable } from "node:stream";
@@ -26,6 +26,18 @@ const crawlQueue = new Queue<CrawlJobData>("crawl-jobs", {
 interface CrawlJobData {
   siteId: string;
   crawlId: string;
+}
+
+async function readGlobalDownloadBlacklist(): Promise<string[]> {
+  const setting = await db.query.settings.findFirst({
+    where: eq(settings.key, "globalDownloadBlacklist"),
+  });
+
+  const value = setting?.value;
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === "string");
+  }
+  return [];
 }
 
 class CrawlCancelledError extends Error {
@@ -188,6 +200,10 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
   const maxSiteConcurrency = parsePositiveIntEnv("MAX_SITE_CONCURRENCY", 8);
   const zipPrebuildTimeoutMs = parsePositiveIntEnv("ZIP_PREBUILD_TIMEOUT_MS", 120000);
   const crawlConcurrency = Math.max(1, Math.min(site.concurrency ?? 5, maxSiteConcurrency));
+  const globalDownloadBlacklist = await readGlobalDownloadBlacklist();
+  const combinedDownloadBlacklist = Array.from(
+    new Set([...(globalDownloadBlacklist ?? []), ...(site.downloadBlacklist ?? [])])
+  );
 
   if ((site.concurrency ?? 5) > crawlConcurrency) {
     await publishEvent(crawlId, {
@@ -259,6 +275,7 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
       concurrency: crawlConcurrency,
       maxPages: site.maxPages ?? undefined,
       excludePatterns: site.excludePatterns ?? undefined,
+      downloadBlacklist: combinedDownloadBlacklist,
       removeWebflowBadge: site.removeWebflowBadge ?? true,
       redirectsCsv: site.redirectsCsv ?? undefined,
       resume: shouldResume,

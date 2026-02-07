@@ -15,6 +15,8 @@ export interface ScrapeConfig {
   concurrency?: number;
   maxPages?: number;
   excludePatterns?: string[];
+  downloadBlacklist?: string[];
+  globalDownloadBlacklist?: string[];
   removeWebflowBadge?: boolean;
   redirectsCsv?: string;
 
@@ -44,6 +46,8 @@ export interface CrawlOptions {
   concurrency: number;
   maxPages?: number;
   excludePatterns?: string[];
+  downloadBlacklist?: string[];
+  globalDownloadBlacklist?: string[];
   removeWebflowBadge?: boolean;
   resume?: boolean;
   retryFailed?: boolean;

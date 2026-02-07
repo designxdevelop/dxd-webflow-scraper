@@ -63,7 +63,7 @@ const downloadBlacklistRuleSchema = z
 const createSiteSchema = z.object({
   name: z.string().min(1).max(255),
   url: z.string().url(),
-  concurrency: z.number().int().min(1).max(20).optional(),
+  concurrency: z.number().int().min(1).max(30).optional(),
   maxPages: z.number().int().min(1).optional().nullable(),
   excludePatterns: z.array(z.string()).optional(),
   downloadBlacklist: z.array(downloadBlacklistRuleSchema).optional(),

@@ -92,7 +92,7 @@ describe("rewriteHtmlDocument code component mirroring", () => {
     const parsedLoader = JSON.parse(dataLoader);
     assert.equal(
       parsedLoader?.val?.clientModuleUrl,
-      "/code-components/cdn.example.com/components/wf-manifest.json"
+      "./code-components/cdn.example.com/components/wf-manifest.json"
     );
 
     const wfManifestPath = path.join(outputDir, "code-components/cdn.example.com/components/wf-manifest.json");
@@ -115,6 +115,69 @@ describe("rewriteHtmlDocument code component mirroring", () => {
   });
 });
 
+describe("rewriteHtmlDocument offline path normalization", () => {
+  it("rewrites local archive root paths to page-relative paths for nested pages", async () => {
+    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "dxd-offline-paths-"));
+    createdTempDirs.push(outputDir);
+
+    const responses = new Map<string, Response>([
+      [
+        "https://example.com/css/main.css",
+        textResponse("body{background:url('/images/from-css.png')}"),
+      ],
+      ["https://example.com/js/app.js", textResponse("const logo = '/images/logo.png';")],
+      ["https://example.com/images/logo.png", binaryResponse("image/png")],
+      ["https://example.com/images/logo@2x.png", binaryResponse("image/png")],
+      ["https://example.com/images/bg.png", binaryResponse("image/png")],
+      ["https://example.com/images/hero.png", binaryResponse("image/png")],
+      ["https://example.com/images/from-css.png", binaryResponse("image/png")],
+    ]);
+
+    globalThis.fetch = async (input: RequestInfo | URL): Promise<Response> => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const response = responses.get(url);
+      if (!response) {
+        throw new Error(`Unexpected fetch URL in test: ${url}`);
+      }
+      return response.clone();
+    };
+
+    const assets = new AssetDownloader(outputDir);
+    await assets.init();
+
+    const rewritten = await rewriteHtmlDocument({
+      html: `
+        <html><head>
+          <link rel="stylesheet" href="/css/main.css" />
+          <script src="/js/app.js"></script>
+          <style>.hero{background-image:url('/images/hero.png')}</style>
+        </head><body>
+          <img src="/images/logo.png" srcset="/images/logo.png 1x, /images/logo@2x.png 2x" />
+          <div style="background-image:url('/images/bg.png')"></div>
+        </body></html>
+      `,
+      pageUrl: "https://example.com/docs/guide/",
+      assets,
+      removeWebflowBadge: false,
+    });
+
+    const $ = load(rewritten);
+    assert.match($('link[rel="stylesheet"]').attr("href") || "", /^\.\.\/\.\.\/css\//);
+    assert.match($("script[src]").attr("src") || "", /^\.\.\/\.\.\/js\//);
+    assert.match($("img[src]").attr("src") || "", /^\.\.\/\.\.\/images\//);
+    assert.match($("img[src]").attr("srcset") || "", /^\.\.\/\.\.\/images\//);
+    assert.match($("style").text(), /\.\.\/\.\.\/images\//);
+    assert.match($("div[style]").attr("style") || "", /\.\.\/\.\.\/images\//);
+
+    const cssDir = path.join(outputDir, "css");
+    const cssFiles = await fs.readdir(cssDir);
+    assert.ok(cssFiles.length > 0, "Expected rewritten CSS file");
+    const cssContent = await fs.readFile(path.join(cssDir, cssFiles[0]), "utf8");
+    assert.match(cssContent, /\.\.\/images\//);
+    assert.doesNotMatch(cssContent, /url\(['"]?\/images\//);
+  });
+});
+
 function jsonResponse(data: unknown): Response {
   return new Response(JSON.stringify(data), {
     status: 200,
@@ -129,6 +192,15 @@ function textResponse(text: string): Response {
     status: 200,
     headers: {
       "content-type": "text/plain",
+    },
+  });
+}
+
+function binaryResponse(contentType: string): Response {
+  return new Response(new Uint8Array([0, 1, 2]), {
+    status: 200,
+    headers: {
+      "content-type": contentType,
     },
   });
 }

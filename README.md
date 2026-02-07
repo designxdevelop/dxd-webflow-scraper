@@ -120,7 +120,7 @@ Open http://localhost:5173 for the dashboard.
 
 ### Site Settings
 
-- **Concurrency**: Number of pages to crawl in parallel (1-20)
+- **Concurrency**: Number of pages to crawl in parallel (1-30)
 - **Max Pages**: Limit total pages (useful for testing)
 - **Exclude Patterns**: Regex patterns to skip certain URLs
 - **Remove Webflow Badge**: Strip the Webflow attribution badge

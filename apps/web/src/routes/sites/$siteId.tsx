@@ -270,7 +270,7 @@ function SiteDetailPage() {
                 <input
                   type="number"
                   min={1}
-                  max={20}
+                  max={30}
                   value={concurrency}
                   onChange={(e) => setConcurrency(parseInt(e.target.value, 10) || 5)}
                   className="w-full px-3 py-2 border border-input rounded-md bg-background"
@@ -325,7 +325,7 @@ function SiteDetailPage() {
                     .map((line) => line.trim())
                     .filter((line) => line.length > 0);
                   configurationMutation.mutate({
-                    concurrency: Math.max(1, Math.min(20, concurrency)),
+                    concurrency: Math.max(1, Math.min(30, concurrency)),
                     maxPages:
                       parsedMaxPages && !Number.isNaN(parsedMaxPages) && parsedMaxPages > 0
                         ? parsedMaxPages
@@ -334,7 +334,7 @@ function SiteDetailPage() {
                     downloadBlacklist: rules,
                   });
                 }}
-                disabled={configurationMutation.isPending || concurrency < 1 || concurrency > 20}
+                disabled={configurationMutation.isPending || concurrency < 1 || concurrency > 30}
                 className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50"
               >
                 {configurationMutation.isPending ? "Saving..." : "Update Configuration"}

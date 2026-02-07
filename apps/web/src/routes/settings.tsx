@@ -128,7 +128,7 @@ function SettingsPage() {
               <input
                 type="number"
                 min={1}
-                max={20}
+                max={30}
                 value={formData.defaultConcurrency}
                 onChange={(e) =>
                   setFormData({
@@ -144,7 +144,7 @@ function SettingsPage() {
                 }}
               />
               <p className="text-xs mt-1.5" style={{ color: "#A9A49E" }}>
-                Number of parallel requests (1-20)
+                Number of parallel requests (1-30)
               </p>
             </div>
 

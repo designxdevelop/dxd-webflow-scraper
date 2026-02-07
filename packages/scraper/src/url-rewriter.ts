@@ -29,6 +29,7 @@ export async function rewriteHtmlDocument(options: RewriteOptions): Promise<stri
   await processInlineStyles($, pageUrl, assets);
   await processMetaImages($, pageUrl, assets);
   await processIframes($, pageUrl, assets);
+  normalizeLocalArchivePathsForOffline($, pageUrl);
 
   return $.html();
 }
@@ -709,6 +710,148 @@ function removeIntegrity($el: Cheerio<any>) {
   if ($el.attr("integrity")) {
     $el.removeAttr("integrity");
   }
+}
+
+function normalizeLocalArchivePathsForOffline($: CheerioAPI, pageUrl: string) {
+  const pageDir = getArchivedPageDir(pageUrl);
+  const attrs = ["href", "src", "action", "poster", "content"];
+
+  for (const attr of attrs) {
+    $(`[${attr}]`).each((_, el) => {
+      const $el = $(el);
+      const raw = $el.attr(attr);
+      if (!raw) return;
+      const normalized = rewriteRootArchivePath(raw, pageDir);
+      if (normalized !== raw) {
+        $el.attr(attr, normalized);
+      }
+    });
+  }
+
+  $("[srcset]").each((_, el) => {
+    const $el = $(el);
+    const raw = $el.attr("srcset");
+    if (!raw) return;
+
+    const normalized = raw
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .map((entry) => {
+        const [url, ...rest] = entry.split(/\s+/);
+        const rewritten = rewriteRootArchivePath(url, pageDir);
+        return rest.length ? `${rewritten} ${rest.join(" ")}` : rewritten;
+      })
+      .join(", ");
+
+    if (normalized && normalized !== raw) {
+      $el.attr("srcset", normalized);
+    }
+  });
+
+  $("style").each((_, el) => {
+    const $el = $(el);
+    const css = $el.html();
+    if (!css) return;
+    const normalized = rewriteCssRootArchivePaths(css, pageDir);
+    if (normalized !== css) {
+      $el.text(normalized);
+    }
+  });
+
+  $("[style]").each((_, el) => {
+    const $el = $(el);
+    const style = $el.attr("style");
+    if (!style) return;
+    const normalized = rewriteCssRootArchivePaths(style, pageDir);
+    if (normalized !== style) {
+      $el.attr("style", normalized);
+    }
+  });
+
+  $("code-island[data-loader]").each((_, el) => {
+    const $el = $(el);
+    const rawLoader = $el.attr("data-loader");
+    if (!rawLoader) return;
+    const parsed = parseJsonAttribute(rawLoader);
+    if (!isRecord(parsed)) return;
+    const val = asRecord(parsed.val);
+    const clientModuleUrl = asString(val?.clientModuleUrl);
+    if (!val || !clientModuleUrl) return;
+    const rewritten = rewriteRootArchivePath(clientModuleUrl, pageDir);
+    if (rewritten !== clientModuleUrl) {
+      val.clientModuleUrl = rewritten;
+      $el.attr("data-loader", JSON.stringify(parsed));
+    }
+  });
+}
+
+function rewriteCssRootArchivePaths(css: string, pageDir: string): string {
+  const urlPattern = /(url\(\s*['"]?)(\/(?:css|js|images|fonts|media|code-components|assets)\/[^)"'\s]+)(['"]?\s*\))/gi;
+  return css.replace(urlPattern, (_m, prefix: string, rootPath: string, suffix: string) => {
+    return `${prefix}${toPageRelativeArchivePath(rootPath, pageDir)}${suffix}`;
+  });
+}
+
+function rewriteRootArchivePath(value: string, pageDir: string): string {
+  if (!isArchiveRootPath(value)) return value;
+  const { pathname, suffix } = splitPathSuffix(value);
+  const relativePath = toPageRelativeArchivePath(pathname, pageDir);
+  return `${relativePath}${suffix}`;
+}
+
+function isArchiveRootPath(value: string): boolean {
+  return /^\/(?:css|js|images|fonts|media|code-components|assets)\//i.test(value);
+}
+
+function splitPathSuffix(value: string): { pathname: string; suffix: string } {
+  const questionMarkIndex = value.indexOf("?");
+  const hashIndex = value.indexOf("#");
+  const indexes = [questionMarkIndex, hashIndex].filter((i) => i >= 0);
+  if (indexes.length === 0) {
+    return { pathname: value, suffix: "" };
+  }
+  const splitAt = Math.min(...indexes);
+  return {
+    pathname: value.slice(0, splitAt),
+    suffix: value.slice(splitAt),
+  };
+}
+
+function toPageRelativeArchivePath(rootPath: string, pageDir: string): string {
+  const normalizedRoot = rootPath.replace(/^\/+/, "");
+  const baseDir = pageDir && pageDir !== "." ? pageDir : ".";
+  let relative = path.posix.relative(baseDir, normalizedRoot);
+  if (!relative || relative === "") {
+    relative = path.posix.basename(normalizedRoot);
+  }
+  if (!relative.startsWith(".")) {
+    relative = `./${relative}`;
+  }
+  return relative;
+}
+
+function getArchivedPageDir(pageUrl: string): string {
+  const parsed = new URL(pageUrl);
+  parsed.hash = "";
+  parsed.search = "";
+  let pathname = parsed.pathname;
+
+  if (!pathname || pathname === "/") {
+    return ".";
+  }
+
+  if (!path.extname(pathname)) {
+    if (!pathname.endsWith("/")) {
+      pathname = `${pathname}/`;
+    }
+    pathname = `${pathname}index.html`;
+  } else if (pathname.endsWith("/")) {
+    pathname = `${pathname}index.html`;
+  }
+
+  const relativePath = pathname.replace(/^\/+/, "");
+  return path.posix.dirname(relativePath) || ".";
 }
 
 function absoluteUrl(value: string | undefined, pageUrl: string): string | undefined {

@@ -122,11 +122,17 @@ export class AssetDownloader {
       if (category === "css") {
         let cssContent = await res.text();
         cssContent = await this.rewriteCssUrls(cssContent, normalized);
-        relativePath = await this.writeTextAsset(cssContent, normalized, "css", ".css");
+        relativePath = this.buildRelativePath(normalized, "css", ".css");
+        const cssDir = path.posix.dirname(relativePath);
+        cssContent = this.rewriteArchiveRootPathsInCss(cssContent, cssDir);
+        await this.writeTextAssetByRelativePath(relativePath, cssContent);
       } else if (category === "js") {
         let jsContent = await res.text();
         jsContent = await this.rewriteJsUrls(jsContent, normalized);
-        relativePath = await this.writeTextAsset(jsContent, normalized, "js", ".js");
+        relativePath = this.buildRelativePath(normalized, "js", ".js");
+        const jsDir = path.posix.dirname(relativePath);
+        jsContent = this.rewriteArchiveRootPathsInJs(jsContent, jsDir);
+        await this.writeTextAssetByRelativePath(relativePath, jsContent);
       } else {
         const contentType = res.headers.get("content-type");
         const buffer = Buffer.from(await res.arrayBuffer());
@@ -208,10 +214,14 @@ export class AssetDownloader {
     fallbackExt: string
   ): Promise<string> {
     const relativePath = this.buildRelativePath(assetUrl, category, fallbackExt);
+    await this.writeTextAssetByRelativePath(relativePath, content);
+    return relativePath;
+  }
+
+  private async writeTextAssetByRelativePath(relativePath: string, content: string): Promise<void> {
     const diskPath = path.join(this.outputDir, relativePath);
     await fs.ensureDir(path.dirname(diskPath));
     await fs.writeFile(diskPath, content, "utf8");
-    return relativePath;
   }
 
   private async writeBinaryAsset(
@@ -646,6 +656,44 @@ export class AssetDownloader {
     }
 
     return result;
+  }
+
+  private rewriteArchiveRootPathsInCss(css: string, currentDir: string): string {
+    const urlPattern = /(url\(\s*['"]?)(\/(?:css|js|images|fonts|media|code-components|assets)\/[^)"'\s]+)(['"]?\s*\))/gi;
+    const importPattern =
+      /(@import\s+(?:url\(\s*)?['"])(\/(?:css|js|images|fonts|media|code-components|assets)\/[^"')\s]+)(['"]\s*\)?)/gi;
+
+    return css
+      .replace(urlPattern, (_m, prefix: string, rootPath: string, suffix: string) => {
+        return `${prefix}${this.toDocumentRelativeArchivePath(rootPath, currentDir)}${suffix}`;
+      })
+      .replace(importPattern, (_m, prefix: string, rootPath: string, suffix: string) => {
+        return `${prefix}${this.toDocumentRelativeArchivePath(rootPath, currentDir)}${suffix}`;
+      });
+  }
+
+  private rewriteArchiveRootPathsInJs(js: string, currentDir: string): string {
+    const stringPattern = /(["'`])(\/(?:css|js|images|fonts|media|code-components|assets)\/[^"'`\s)]+)\1/g;
+    return js.replace(stringPattern, (_m, quote: string, rootPath: string) => {
+      const localPath = this.toDocumentRelativeArchivePath(rootPath, currentDir);
+      return `${quote}${localPath}${quote}`;
+    });
+  }
+
+  private toDocumentRelativeArchivePath(rootPath: string, currentDir: string): string {
+    const normalizedRoot = rootPath.replace(/^\/+/, "");
+    const baseDir = currentDir && currentDir !== "." ? currentDir : ".";
+    let relative = path.posix.relative(baseDir, normalizedRoot);
+
+    if (!relative || relative === "") {
+      relative = path.posix.basename(normalizedRoot);
+    }
+
+    if (!relative.startsWith(".")) {
+      relative = `./${relative}`;
+    }
+
+    return relative.replace(/\\+/g, "/");
   }
 }
 

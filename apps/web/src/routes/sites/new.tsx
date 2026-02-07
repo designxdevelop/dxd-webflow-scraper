@@ -134,7 +134,7 @@ function NewSitePage() {
               <input
                 type="number"
                 min={1}
-                max={20}
+                max={30}
                 value={formData.concurrency || 5}
                 onChange={(e) =>
                   setFormData({ ...formData, concurrency: parseInt(e.target.value) || 5 })

@@ -76,6 +76,8 @@ function SiteDetailPage() {
   const [scheduleFrequency, setScheduleFrequency] = useState<ScheduleFrequency>("daily");
   const [scheduleTime, setScheduleTime] = useState("05:00");
   const [scheduleDays, setScheduleDays] = useState<string[]>(["1"]);
+  const [name, setName] = useState("");
+  const [url, setUrl] = useState("");
 
   const site = data?.site;
 
@@ -83,6 +85,9 @@ function SiteDetailPage() {
     if (!site) {
       return;
     }
+
+    setName(site.name);
+    setUrl(site.url);
 
     const parsed = parseCron(site.scheduleCron ?? null);
     setScheduleEnabled(site.scheduleEnabled ?? false);
@@ -112,6 +117,15 @@ function SiteDetailPage() {
     mutationFn: (payload: { scheduleEnabled: boolean; scheduleCron: string | null }) =>
       sitesApi.update(siteId, payload),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["sites"] });
+      queryClient.invalidateQueries({ queryKey: ["sites", siteId] });
+    },
+  });
+
+  const basicInfoMutation = useMutation({
+    mutationFn: (payload: { name: string; url: string }) => sitesApi.update(siteId, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["sites"] });
       queryClient.invalidateQueries({ queryKey: ["sites", siteId] });
     },
   });
@@ -183,6 +197,49 @@ function SiteDetailPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Configuration */}
         <div className="lg:col-span-1 space-y-6">
+          <div className="bg-card border border-border rounded-lg p-6">
+            <h2 className="text-lg font-semibold mb-4">Basic Information</h2>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm text-muted-foreground mb-1">Site Name</label>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full px-3 py-2 border border-input rounded-md bg-background"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-muted-foreground mb-1">URL</label>
+                <input
+                  type="url"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  className="w-full px-3 py-2 border border-input rounded-md bg-background"
+                  required
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  basicInfoMutation.mutate({
+                    name: name.trim(),
+                    url: url.trim(),
+                  });
+                }}
+                disabled={
+                  basicInfoMutation.isPending ||
+                  name.trim().length === 0 ||
+                  url.trim().length === 0
+                }
+                className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50"
+              >
+                {basicInfoMutation.isPending ? "Saving..." : "Update Site"}
+              </button>
+            </div>
+          </div>
+
           <div className="bg-card border border-border rounded-lg p-6">
             <h2 className="text-lg font-semibold mb-4">Configuration</h2>
             <dl className="space-y-3">

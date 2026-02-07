@@ -216,7 +216,7 @@ function rewriteJsonForPreview(json: string, crawlId: string): string {
   const previewPrefix = `/preview/${crawlId}`;
 
   return json.replace(
-    /("(?:clientModuleUrl|publicPath)"\s*:\s*")(\/(?!\/)[^"]*)(")/gi,
+    /("(?:clientModuleUrl|publicPath|entry)"\s*:\s*")(\/(?!\/)[^"]*)(")/gi,
     (_match, prefix: string, value: string, suffix: string) => {
       const rewritten = rewriteRootRelativeUrl(value, previewPrefix);
       return `${prefix}${rewritten}${suffix}`;

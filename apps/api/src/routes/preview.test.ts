@@ -85,4 +85,39 @@ describe("preview no-index protections", () => {
     assert.ok(res.headers.get("Content-Type")?.includes("text/plain"));
     assert.equal(await res.text(), "User-agent: *\nDisallow: /\n");
   });
+
+  it("rewrites absolute federation manifest entry/publicPath/clientModuleUrl in JSON", async () => {
+    const { app, crawlId } = createTestApp({
+      "output/crawl-1/code-components/code-components.website-files.com/695daf40f278941088e03552/module/wf-manifest.json":
+        Buffer.from(
+          JSON.stringify({
+            entry: "/code-components/code-components.website-files.com/695daf40f278941088e03552/module/mf-manifest.json",
+            clientModuleUrl:
+              "/code-components/code-components.website-files.com/695daf40f278941088e03552/module/wf-manifest.json",
+            publicPath: "/code-components/code-components.website-files.com/695daf40f278941088e03552/module/",
+          })
+        ),
+    });
+
+    const res = await app.request(
+      `/preview/${crawlId}/code-components/code-components.website-files.com/695daf40f278941088e03552/module/wf-manifest.json`
+    );
+
+    assert.equal(res.status, 200);
+    assert.ok(res.headers.get("Content-Type")?.includes("application/json"));
+
+    const parsed = await res.json();
+    assert.equal(
+      parsed.entry,
+      `/preview/${crawlId}/code-components/code-components.website-files.com/695daf40f278941088e03552/module/mf-manifest.json`
+    );
+    assert.equal(
+      parsed.clientModuleUrl,
+      `/preview/${crawlId}/code-components/code-components.website-files.com/695daf40f278941088e03552/module/wf-manifest.json`
+    );
+    assert.equal(
+      parsed.publicPath,
+      `/preview/${crawlId}/code-components/code-components.website-files.com/695daf40f278941088e03552/module/`
+    );
+  });
 });

@@ -8,10 +8,15 @@ import type { AppEnv } from "../env.js";
 
 const app = new Hono<AppEnv>();
 const DOWNLOAD_FAILURE_PATTERN = /(?:Could not|Failed to)\s+download\s+(https?:\/\/\S+)/i;
+const TRAILING_URL_PUNCTUATION = /[),.;:]+$/;
+
+function sanitizeFailedUrlCandidate(raw: string): string {
+  return raw.trim().replace(TRAILING_URL_PUNCTUATION, "");
+}
 
 function normalizeUrlForBlacklist(raw: string): string | null {
   try {
-    const parsed = new URL(raw);
+    const parsed = new URL(sanitizeFailedUrlCandidate(raw));
     parsed.hash = "";
     parsed.search = "";
     return parsed.toString();
@@ -30,7 +35,7 @@ function extractFailedDownloadUrl(log: { message: string; url?: string | null })
     return null;
   }
 
-  const raw = match[1].replace(/[),.;]+$/, "");
+  const raw = sanitizeFailedUrlCandidate(match[1]);
   return normalizeUrlForBlacklist(raw);
 }
 

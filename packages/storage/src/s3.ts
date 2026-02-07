@@ -34,6 +34,10 @@ export class S3Storage implements StorageAdapter {
       region: config.region,
       endpoint: config.endpoint,
       forcePathStyle: config.forcePathStyle ?? false,
+      // R2/S3-compatible endpoints can intermittently reject SDK-calculated CRC32 on streamed bodies.
+      // Prefer checksums only when the service explicitly requires them.
+      requestChecksumCalculation: "WHEN_REQUIRED",
+      responseChecksumValidation: "WHEN_REQUIRED",
       credentials: {
         accessKeyId: config.accessKeyId,
         secretAccessKey: config.secretAccessKey,
@@ -64,14 +68,7 @@ export class S3Storage implements StorageAdapter {
       await pipeline(Readable.fromWeb(stream as any), fs.createWriteStream(tempFilePath));
       const stat = await fsp.stat(tempFilePath);
 
-      await this.client.send(
-        new PutObjectCommand({
-          Bucket: this.config.bucket,
-          Key: filePath,
-          Body: fs.createReadStream(tempFilePath),
-          ContentLength: stat.size,
-        })
-      );
+      await this.putObjectWithFallback(filePath, tempFilePath, stat.size);
     } finally {
       await fsp.unlink(tempFilePath).catch(() => undefined);
     }
@@ -227,14 +224,7 @@ export class S3Storage implements StorageAdapter {
     for (const { file, size } of fileStats) {
       const relative = path.relative(tempDir, file);
       const key = `${finalPrefix}/${relative}`.replace(/\\/g, "/");
-      await this.client.send(
-        new PutObjectCommand({
-          Bucket: this.config.bucket,
-          Key: key,
-          Body: fs.createReadStream(file),
-          ContentLength: size,
-        })
-      );
+      await this.putObjectWithFallback(key, file, size);
       uploadedBytes += size;
       filesUploaded += 1;
       await options?.onProgress?.({
@@ -255,6 +245,34 @@ export class S3Storage implements StorageAdapter {
       return `${this.config.publicUrl.replace(/\/$/, "")}/${filePath}`;
     }
     return filePath;
+  }
+
+  private async putObjectWithFallback(key: string, localFilePath: string, size: number): Promise<void> {
+    try {
+      await this.client.send(
+        new PutObjectCommand({
+          Bucket: this.config.bucket,
+          Key: key,
+          Body: fs.createReadStream(localFilePath),
+          ContentLength: size,
+        })
+      );
+    } catch (error) {
+      if (!isChecksumMismatchError(error)) {
+        throw error;
+      }
+
+      // Fallback: upload from an in-memory buffer to avoid stream checksum mismatch edge cases.
+      const buffer = await fsp.readFile(localFilePath);
+      await this.client.send(
+        new PutObjectCommand({
+          Bucket: this.config.bucket,
+          Key: key,
+          Body: buffer,
+          ContentLength: buffer.length,
+        })
+      );
+    }
   }
 }
 
@@ -303,4 +321,11 @@ function isMissingObjectError(error: unknown): boolean {
     code === "NotFoundError" ||
     maybeError.$metadata?.httpStatusCode === 404
   );
+}
+
+function isChecksumMismatchError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return /crc32 checksum/i.test(error.message);
 }

@@ -52,6 +52,20 @@ function isAbortError(error: unknown): boolean {
   return error.message.includes(CRAWL_ABORT_MESSAGE);
 }
 
+function isPlaywrightClosedError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const msg = error.message.toLowerCase();
+  return (
+    msg.includes("target page, context or browser has been closed") ||
+    msg.includes("browser has been closed") ||
+    msg.includes("context has been closed") ||
+    msg.includes("target closed") ||
+    msg.includes("browser disconnected")
+  );
+}
+
 /**
  * Determine if an error is transient and worth retrying.
  */
@@ -67,7 +81,8 @@ function isTransientError(error: unknown): boolean {
     msg.includes("503") ||
     msg.includes("502") ||
     msg.includes("500") ||
-    msg.includes("429")
+    msg.includes("429") ||
+    isPlaywrightClosedError(error)
   );
 }
 
@@ -79,7 +94,8 @@ async function withRetry<T>(
   maxRetries: number,
   baseDelayMs: number,
   label: string,
-  shouldAbortFn?: () => boolean | Promise<boolean>
+  shouldAbortFn?: () => boolean | Promise<boolean>,
+  onRetry?: (error: unknown, nextAttempt: number) => void | Promise<void>
 ): Promise<T> {
   let lastError: unknown;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -99,6 +115,10 @@ async function withRetry<T>(
       // Check if we should abort before retrying
       if (shouldAbortFn && (await shouldAbortFn())) {
         throw error;
+      }
+
+      if (onRetry) {
+        await onRetry(error, attempt + 2);
       }
 
       const delay = baseDelayMs * Math.pow(2, attempt);
@@ -277,6 +297,7 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
 
     const browsers: Browser[] = [];
     const contexts: BrowserContext[] = [];
+    const browserRecoveries: Array<Promise<void> | null> = [];
     const pendingSucceeded: string[] = [];
     const pendingFailed: string[] = [];
     let processed = 0;
@@ -341,6 +362,35 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
     const maxRetries = readPositiveInt("CRAWL_PAGE_MAX_RETRIES", 2);
     const retryBaseDelayMs = readPositiveInt("CRAWL_PAGE_RETRY_DELAY_MS", 2000);
 
+    async function recoverBrowserContext(browserIndex: number): Promise<void> {
+      if (browserRecoveries[browserIndex]) {
+        await browserRecoveries[browserIndex];
+        return;
+      }
+
+      const recovery = (async () => {
+        const oldContext = contexts[browserIndex];
+        const oldBrowser = browsers[browserIndex];
+
+        await oldContext?.close().catch(() => undefined);
+        await oldBrowser?.close().catch(() => undefined);
+
+        const newBrowser = await chromium.launch({ headless: true });
+        const newContext = await newBrowser.newContext();
+        browsers[browserIndex] = newBrowser;
+        contexts[browserIndex] = newContext;
+
+        log.warn(`Recovered browser ${browserIndex + 1} after unexpected Playwright close.`);
+      })();
+
+      browserRecoveries[browserIndex] = recovery;
+      try {
+        await recovery;
+      } finally {
+        browserRecoveries[browserIndex] = null;
+      }
+    }
+
     try {
       for (let i = 0; i < numBrowsers; i++) {
         await assertNotAborted(options);
@@ -353,8 +403,7 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
 
       // B2: Shared work queue — each browser worker pulls from the same pool
       await Promise.all(
-        browsers.map(async (browser, browserIndex) => {
-          const context = contexts[browserIndex];
+        browsers.map(async (_browser, browserIndex) => {
           const workerCount = Math.max(1, Math.min(concurrencyPerBrowser, urlQueue.length));
 
           const workers = Array.from({ length: workerCount }, async () => {
@@ -384,7 +433,12 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
                   maxRetries,
                   retryBaseDelayMs,
                   url,
-                  options.shouldAbort
+                  options.shouldAbort,
+                  async (retryError) => {
+                    if (isPlaywrightClosedError(retryError)) {
+                      await recoverBrowserContext(browserIndex);
+                    }
+                  }
                 );
 
                 const { relativePath, html } = pageResult;

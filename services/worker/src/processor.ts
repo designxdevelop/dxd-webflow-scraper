@@ -159,6 +159,8 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
   const { siteId, crawlId } = job.data;
 
   console.log(`[Worker] Starting crawl job: ${crawlId} for site: ${siteId}`);
+  const maxAttempts = Math.max(1, job.opts.attempts ?? 1);
+  const currentAttempt = job.attemptsMade + 1;
 
   const site = await db.query.sites.findFirst({
     where: eq(sites.id, siteId),
@@ -487,14 +489,29 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
       timestamp: new Date().toISOString(),
     });
 
-    try {
-      await fs.rm(outputDir, { recursive: true, force: true });
-    } catch {
-      // Ignore cleanup errors
+    if (isCancelled) {
+      try {
+        await fs.rm(outputDir, { recursive: true, force: true });
+      } catch {
+        // Ignore cleanup errors
+      }
+      return;
     }
 
-    if (isCancelled) {
-      return;
+    const hasMoreRetries = currentAttempt < maxAttempts;
+    if (hasMoreRetries) {
+      await publishEvent(crawlId, {
+        type: "log",
+        level: "warn",
+        message: `Preserving partial crawl output for retry ${currentAttempt + 1}/${maxAttempts}`,
+        timestamp: new Date().toISOString(),
+      });
+    } else {
+      try {
+        await fs.rm(outputDir, { recursive: true, force: true });
+      } catch {
+        // Ignore cleanup errors
+      }
     }
 
     throw error;

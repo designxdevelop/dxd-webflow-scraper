@@ -22,14 +22,16 @@ function SettingsPage() {
     defaultMaxPages: "",
     globalDownloadBlacklist: "",
   });
+  const defaultGlobalBlacklist = (data?.defaults?.globalDownloadBlacklist || []).join("\n");
 
   useEffect(() => {
     if (data?.settings) {
+      const resolvedGlobalBlacklist =
+        ((data.settings.globalDownloadBlacklist as string[]) || data.defaults?.globalDownloadBlacklist || []);
       setFormData({
         defaultConcurrency: (data.settings.defaultConcurrency as number) || 5,
         defaultMaxPages: (data.settings.defaultMaxPages as string) || "",
-        globalDownloadBlacklist:
-          ((data.settings.globalDownloadBlacklist as string[]) || []).join("\n"),
+        globalDownloadBlacklist: resolvedGlobalBlacklist.join("\n"),
       });
     }
   }, [data]);
@@ -117,6 +119,10 @@ function SettingsPage() {
           <p className="text-sm text-muted-foreground">
             One rule per line. Use a full URL or a URL prefix ending with <code>*</code>.
           </p>
+          <p className="text-xs text-muted-foreground">
+            Built-in defaults are included automatically. Saving custom rules will not remove core
+            defaults.
+          </p>
           <textarea
             value={formData.globalDownloadBlacklist}
             onChange={(e) =>
@@ -126,8 +132,22 @@ function SettingsPage() {
               })
             }
             className="w-full min-h-40 px-3 py-2 border border-input rounded-md bg-background font-mono text-xs"
-            placeholder={"https://js.partnerstack.com/partnerstack.min.js\nhttps://cdn.taboola.com/resources/codeless/*"}
+            placeholder={"https://example.com/tracker.js\ndomain:example-tracker.com"}
           />
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() =>
+                setFormData({
+                  ...formData,
+                  globalDownloadBlacklist: defaultGlobalBlacklist,
+                })
+              }
+              className="px-3 py-1.5 text-sm border border-border rounded-md hover:bg-muted"
+            >
+              Reset to Defaults
+            </button>
+          </div>
         </div>
 
         <div className="flex items-center justify-end gap-4">

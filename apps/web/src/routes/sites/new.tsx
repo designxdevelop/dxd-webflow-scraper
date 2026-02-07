@@ -177,6 +177,27 @@ function NewSitePage() {
               Remove Webflow badge
             </label>
           </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">Site Download Blacklist (Optional)</label>
+            <textarea
+              value={(formData.downloadBlacklist || []).join("\n")}
+              onChange={(e) =>
+                setFormData({
+                  ...formData,
+                  downloadBlacklist: e.target.value
+                    .split("\n")
+                    .map((line) => line.trim())
+                    .filter((line) => line.length > 0),
+                })
+              }
+              className="w-full min-h-28 px-3 py-2 border border-input rounded-md bg-background font-mono text-xs"
+              placeholder={"https://cdn.example.com/script.js\nhttps://cdn.example.com/embeds/*"}
+            />
+            <p className="text-xs text-muted-foreground mt-1">
+              These rules apply only to this site and are merged with global blacklist rules.
+            </p>
+          </div>
         </div>
 
         <div className="bg-card border border-border rounded-lg p-6 space-y-4">

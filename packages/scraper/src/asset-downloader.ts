@@ -18,6 +18,29 @@ type AssetDownloaderOptions = {
 const DEFAULT_GLOBAL_DOWNLOAD_BLACKLIST = [
   "https://js.partnerstack.com/partnerstack.min.js",
   "https://cdn.taboola.com/resources/codeless/codeless-events.js",
+  "domain:termly.io",
+  "domain:googletagmanager.com",
+  "domain:google-analytics.com",
+  "domain:facebook.net",
+  "domain:connect.facebook.net",
+  "domain:redditstatic.com",
+  "domain:analytics.tiktok.com",
+  "domain:posthog.com",
+  "domain:doubleclick.net",
+  "domain:googlesyndication.com",
+  "domain:googleadservices.com",
+  "domain:chatlio.com",
+  "domain:intercom.io",
+  "domain:hotjar.com",
+  "domain:mixpanel.com",
+  "domain:segment.io",
+  "domain:segment.com",
+  "domain:amplitude.com",
+  "domain:heapanalytics.com",
+  "domain:fullstory.com",
+  "domain:clarity.ms",
+  "domain:partnerstack.com",
+  "domain:taboola.com",
 ];
 
 export class AssetDownloader {
@@ -287,39 +310,6 @@ export class AssetDownloader {
         return true;
       }
 
-      // Block known third-party tracking/analytics domains
-      const blockedDomains = [
-        "termly.io",
-        "googletagmanager.com",
-        "google-analytics.com",
-        "facebook.net",
-        "connect.facebook.net",
-        "redditstatic.com",
-        "analytics.tiktok.com",
-        "posthog.com",
-        "doubleclick.net",
-        "googlesyndication.com",
-        "googleadservices.com",
-        "chatlio.com",
-        "intercom.io",
-        "hotjar.com",
-        "mixpanel.com",
-        "segment.io",
-        "segment.com",
-        "amplitude.com",
-        "heapanalytics.com",
-        "fullstory.com",
-        "clarity.ms",
-        "partnerstack.com",
-        "taboola.com",
-      ];
-
-      for (const blocked of blockedDomains) {
-        if (hostname.includes(blocked)) {
-          return false;
-        }
-      }
-
       // Allow same-origin or relative URLs
       return true;
     } catch {
@@ -333,7 +323,19 @@ export class AssetDownloader {
     }
 
     const normalizedWithoutQuery = stripQuery(url);
+    const hostname = getHostname(url);
     for (const rule of this.blacklist) {
+      if (rule.startsWith("domain:")) {
+        const domain = rule.slice("domain:".length);
+        if (
+          hostname &&
+          (hostname === domain || hostname.endsWith(`.${domain}`))
+        ) {
+          return rule;
+        }
+        continue;
+      }
+
       if (rule.endsWith("*")) {
         const prefix = rule.slice(0, -1);
         if (url.startsWith(prefix) || normalizedWithoutQuery.startsWith(prefix)) {
@@ -700,6 +702,14 @@ function normalizeBlacklist(downloadBlacklist: string[]): string[] {
       continue;
     }
 
+    if (trimmed.startsWith("domain:")) {
+      const domain = trimmed.slice("domain:".length).trim().toLowerCase().replace(/^\.+/, "");
+      if (domain) {
+        normalized.add(`domain:${domain}`);
+      }
+      continue;
+    }
+
     if (trimmed.endsWith("*")) {
       const prefix = trimmed.slice(0, -1);
       try {
@@ -721,6 +731,14 @@ function normalizeBlacklist(downloadBlacklist: string[]): string[] {
     }
   }
   return Array.from(normalized);
+}
+
+function getHostname(rawUrl: string): string | null {
+  try {
+    return new URL(rawUrl).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
 }
 
 function isLikelyAssetPath(value: string): boolean {

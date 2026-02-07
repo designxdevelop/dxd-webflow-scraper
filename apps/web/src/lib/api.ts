@@ -200,7 +200,12 @@ export const crawlsApi = {
 
 // Settings API
 export const settingsApi = {
-  get: async (): Promise<{ settings: Record<string, unknown> }> => {
+  get: async (): Promise<{
+    settings: Record<string, unknown>;
+    defaults?: {
+      globalDownloadBlacklist?: string[];
+    };
+  }> => {
     const res = await fetchWithAuth(`${API_BASE}/settings`);
     if (!res.ok) throw new Error("Failed to fetch settings");
     return res.json();

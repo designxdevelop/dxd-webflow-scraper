@@ -155,9 +155,48 @@ async function publishEvent(crawlId: string, event: object) {
   );
 }
 
+async function getLocalDirectorySize(dirPath: string): Promise<number> {
+  let total = 0;
+
+  async function walk(currentPath: string): Promise<void> {
+    let entries;
+    try {
+      entries = await fs.readdir(currentPath, { withFileTypes: true } as const);
+    } catch {
+      return;
+    }
+
+    await Promise.all(
+      entries.map(async (entry) => {
+        const entryPath = `${currentPath}/${entry.name}`;
+        if (entry.isDirectory()) {
+          await walk(entryPath);
+          return;
+        }
+
+        if (!entry.isFile()) {
+          return;
+        }
+
+        try {
+          const stat = await fs.stat(entryPath);
+          total += stat.size;
+        } catch {
+          // Ignore files that vanish while scanning.
+        }
+      })
+    );
+  }
+
+  await walk(dirPath);
+  return total;
+}
+
 async function moveOutputToFinal(crawlId: string, outputDir: string): Promise<{ finalPath: string; outputSize: number }> {
   const finalPath = `archives/${crawlId}`;
-  const tempSize = await storage.getSize(outputDir);
+  // outputDir is a local filesystem path (e.g. /tmp/dxd-archiver/<id>),
+  // not a storage key prefix. Measure it on disk before uploading.
+  const tempSize = await getLocalDirectorySize(outputDir);
 
   if (tempSize > 0) {
     const movedPath = await storage.moveToFinal(outputDir, crawlId);

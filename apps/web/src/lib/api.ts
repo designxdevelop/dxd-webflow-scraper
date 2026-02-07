@@ -2,6 +2,18 @@
 const API_URL = import.meta.env.VITE_API_URL || "";
 const API_BASE = `${API_URL}/api`;
 
+export class ApiError extends Error {
+  status: number;
+  details?: unknown;
+
+  constructor(message: string, status: number, details?: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.details = details;
+  }
+}
+
 // Helper to make authenticated requests
 async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
   return fetch(url, {
@@ -11,6 +23,24 @@ async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Re
       ...options.headers,
     },
   });
+}
+
+async function parseApiResponse<T>(res: Response, defaultMessage: string): Promise<T> {
+  const contentType = res.headers.get("content-type") || "";
+  const isJson = contentType.includes("application/json");
+  const payload = isJson ? await res.json().catch(() => undefined) : await res.text().catch(() => undefined);
+
+  if (!res.ok) {
+    let message = defaultMessage;
+    if (payload && typeof payload === "object" && "message" in payload && typeof payload.message === "string") {
+      message = payload.message;
+    } else if (payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string") {
+      message = payload.error;
+    }
+    throw new ApiError(message, res.status, payload);
+  }
+
+  return payload as T;
 }
 
 export interface Site {
@@ -85,14 +115,12 @@ export interface DownloadSuggestion {
 export const sitesApi = {
   list: async (): Promise<{ sites: Site[] }> => {
     const res = await fetchWithAuth(`${API_BASE}/sites`);
-    if (!res.ok) throw new Error("Failed to fetch sites");
-    return res.json();
+    return parseApiResponse<{ sites: Site[] }>(res, "Failed to fetch sites");
   },
 
   get: async (id: string): Promise<{ site: Site & { crawls: Crawl[] } }> => {
     const res = await fetchWithAuth(`${API_BASE}/sites/${id}`);
-    if (!res.ok) throw new Error("Failed to fetch site");
-    return res.json();
+    return parseApiResponse<{ site: Site & { crawls: Crawl[] } }>(res, "Failed to fetch site");
   },
 
   create: async (data: CreateSiteInput): Promise<{ site: Site }> => {
@@ -101,8 +129,7 @@ export const sitesApi = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
-    if (!res.ok) throw new Error("Failed to create site");
-    return res.json();
+    return parseApiResponse<{ site: Site }>(res, "Failed to create site");
   },
 
   update: async (id: string, data: UpdateSiteInput): Promise<{ site: Site }> => {
@@ -111,19 +138,17 @@ export const sitesApi = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
-    if (!res.ok) throw new Error("Failed to update site");
-    return res.json();
+    return parseApiResponse<{ site: Site }>(res, "Failed to update site");
   },
 
   delete: async (id: string): Promise<void> => {
     const res = await fetchWithAuth(`${API_BASE}/sites/${id}`, { method: "DELETE" });
-    if (!res.ok) throw new Error("Failed to delete site");
+    await parseApiResponse<{ success: boolean }>(res, "Failed to delete site");
   },
 
   startCrawl: async (id: string): Promise<{ crawl: Crawl }> => {
     const res = await fetchWithAuth(`${API_BASE}/sites/${id}/crawl`, { method: "POST" });
-    if (!res.ok) throw new Error("Failed to start crawl");
-    return res.json();
+    return parseApiResponse<{ crawl: Crawl }>(res, "Failed to start crawl");
   },
 };
 
@@ -143,20 +168,17 @@ export const crawlsApi = {
 
     const url = `${API_BASE}/crawls${searchParams.toString() ? `?${searchParams}` : ""}`;
     const res = await fetchWithAuth(url);
-    if (!res.ok) throw new Error("Failed to fetch crawls");
-    return res.json();
+    return parseApiResponse<{ crawls: Crawl[] }>(res, "Failed to fetch crawls");
   },
 
   get: async (id: string): Promise<{ crawl: Crawl & { logs: CrawlLog[] } }> => {
     const res = await fetchWithAuth(`${API_BASE}/crawls/${id}`);
-    if (!res.ok) throw new Error("Failed to fetch crawl");
-    return res.json();
+    return parseApiResponse<{ crawl: Crawl & { logs: CrawlLog[] } }>(res, "Failed to fetch crawl");
   },
 
   cancel: async (id: string): Promise<{ crawl: Crawl }> => {
     const res = await fetchWithAuth(`${API_BASE}/crawls/${id}/cancel`, { method: "POST" });
-    if (!res.ok) throw new Error("Failed to cancel crawl");
-    return res.json();
+    return parseApiResponse<{ crawl: Crawl }>(res, "Failed to cancel crawl");
   },
 
   getDownloadUrl: (id: string): string => {
@@ -182,8 +204,12 @@ export const crawlsApi = {
 
     const url = `${API_BASE}/crawls/${id}/download-suggestions${searchParams.toString() ? `?${searchParams}` : ""}`;
     const res = await fetchWithAuth(url);
-    if (!res.ok) throw new Error("Failed to fetch download suggestions");
-    return res.json();
+    return parseApiResponse<{
+      crawlId: string;
+      siteId: string | null;
+      totalDistinctFailures: number;
+      suggestions: DownloadSuggestion[];
+    }>(res, "Failed to fetch download suggestions");
   },
 
   applyDownloadSuggestions: async (
@@ -195,8 +221,10 @@ export const crawlsApi = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ urls }),
     });
-    if (!res.ok) throw new Error("Failed to apply download suggestions");
-    return res.json();
+    return parseApiResponse<{ success: boolean; added: number; site: Site }>(
+      res,
+      "Failed to apply download suggestions"
+    );
   },
 };
 
@@ -209,8 +237,12 @@ export const settingsApi = {
     };
   }> => {
     const res = await fetchWithAuth(`${API_BASE}/settings`);
-    if (!res.ok) throw new Error("Failed to fetch settings");
-    return res.json();
+    return parseApiResponse<{
+      settings: Record<string, unknown>;
+      defaults?: {
+        globalDownloadBlacklist?: string[];
+      };
+    }>(res, "Failed to fetch settings");
   },
 
   update: async (data: Record<string, unknown>): Promise<void> => {
@@ -219,7 +251,7 @@ export const settingsApi = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     });
-    if (!res.ok) throw new Error("Failed to update settings");
+    await parseApiResponse<{ success: boolean }>(res, "Failed to update settings");
   },
 };
 

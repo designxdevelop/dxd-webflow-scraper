@@ -1,8 +1,10 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { sitesApi, crawlsApi } from "@/lib/api";
+import { ApiError, sitesApi, crawlsApi } from "@/lib/api";
 import { Globe, Clock, ArrowRight, Activity, TrendingUp, Layers, Plus } from "lucide-react";
+import { useEffect } from "react";
+import { useNavigate } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/")({
   component: DashboardPage,
@@ -32,17 +34,27 @@ const itemVariants = {
 };
 
 function DashboardPage() {
-  const { data: sitesData } = useQuery({
+  const navigate = useNavigate();
+  const { data: sitesData, error: sitesError } = useQuery({
     queryKey: ["sites"],
     queryFn: sitesApi.list,
     refetchInterval: 10000,
   });
 
-  const { data: crawlsData } = useQuery({
+  const { data: crawlsData, error: crawlsError } = useQuery({
     queryKey: ["crawls", { limit: 5 }],
     queryFn: () => crawlsApi.list({ limit: 5 }),
     refetchInterval: 5000,
   });
+
+  useEffect(() => {
+    const authError = [sitesError, crawlsError].find(
+      (err) => err instanceof ApiError && err.status === 401
+    );
+    if (authError) {
+      navigate({ to: "/login" });
+    }
+  }, [sitesError, crawlsError, navigate]);
 
   const sites = sitesData?.sites || [];
   const recentCrawls = crawlsData?.crawls || [];
@@ -151,10 +163,10 @@ function DashboardPage() {
                     <h2 className="text-sm font-semibold" style={{ color: "#fafafa" }}>Sites</h2>
                     <p className="text-xs font-mono" style={{ color: "#71717a" }}>Monitored</p>
                   </div>
-                </div>                <Link
+                </div>
+                <Link
                   to="/sites"
-                  className="flex items-center gap-1 text-xs font-medium transition-colors hover:opacity-80"
-                  style={{ color: "#818cf8" }}
+                  className="btn-ghost btn-sm"
                 >
                   View all
                   <ArrowRight size={14} />
@@ -230,8 +242,7 @@ function DashboardPage() {
                 </div>
                 <Link
                   to="/crawls"
-                  className="flex items-center gap-1 text-xs font-medium transition-colors hover:opacity-80"
-                  style={{ color: "#818cf8" }}
+                  className="btn-ghost btn-sm"
                 >
                   View all
                   <ArrowRight size={14} />

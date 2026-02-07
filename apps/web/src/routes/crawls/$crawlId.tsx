@@ -1,5 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { motion } from "framer-motion";
 import { crawlsApi } from "@/lib/api";
 import { useCrawlLogs } from "@/lib/hooks/useCrawlLogs";
 import { ArrowLeft, Download, ExternalLink, XCircle, Wifi, WifiOff, Ban } from "lucide-react";
@@ -67,8 +68,13 @@ function CrawlDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="p-8">
-        <p className="text-muted-foreground">Loading...</p>
+      <div className="p-8 flex items-center justify-center py-20">
+        <motion.div
+          animate={{ rotate: 360 }}
+          transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
+          className="w-8 h-8 border-2 rounded-full"
+          style={{ borderColor: "#27272a", borderTopColor: "#6366f1" }}
+        />
       </div>
     );
   }
@@ -76,7 +82,7 @@ function CrawlDetailPage() {
   if (error || !data) {
     return (
       <div className="p-8">
-        <p className="text-destructive">Failed to load crawl</p>
+        <p className="text-sm font-mono" style={{ color: "#ef4444" }}>Failed to load crawl</p>
       </div>
     );
   }

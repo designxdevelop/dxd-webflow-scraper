@@ -1,8 +1,9 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { sitesApi } from "@/lib/api";
+import { ApiError, sitesApi } from "@/lib/api";
 import { Plus, Globe, Trash2, Play, ExternalLink, Search } from "lucide-react";
+import { useEffect } from "react";
 
 export const Route = createFileRoute("/sites/")({
   component: SitesPage,
@@ -33,12 +34,19 @@ const itemVariants = {
 
 function SitesPage() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error } = useQuery({
     queryKey: ["sites"],
     queryFn: sitesApi.list,
     refetchInterval: 10000,
   });
+
+  useEffect(() => {
+    if (error instanceof ApiError && error.status === 401) {
+      navigate({ to: "/login" });
+    }
+  }, [error, navigate]);
 
   const deleteMutation = useMutation({
     mutationFn: sitesApi.delete,
@@ -104,6 +112,15 @@ function SitesPage() {
             className="w-8 h-8 border-2 rounded-full"
             style={{ borderColor: "#27272a", borderTopColor: "#6366f1" }}
           />
+        </div>
+      ) : isError ? (
+        <div className="card-dark p-6">
+          <p className="text-sm font-medium" style={{ color: "#ef4444" }}>
+            {error instanceof Error ? error.message : "Failed to load sites"}
+          </p>
+          <p className="text-xs mt-2" style={{ color: "#71717a" }}>
+            Check API auth/session and database migrations.
+          </p>
         </div>
       ) : sites.length === 0 ? (
         <EmptyState />

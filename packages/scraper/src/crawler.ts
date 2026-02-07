@@ -404,6 +404,7 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
       // B2: Shared work queue — each browser worker pulls from the same pool
       await Promise.all(
         browsers.map(async (_browser, browserIndex) => {
+          const context = contexts[browserIndex];
           const workerCount = Math.max(1, Math.min(concurrencyPerBrowser, urlQueue.length));
 
           const workers = Array.from({ length: workerCount }, async () => {

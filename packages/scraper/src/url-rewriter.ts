@@ -364,21 +364,29 @@ async function mirrorFederatedModule(clientModuleUrl: string, assets: AssetDownl
   const localLoaderPath = path.posix.join(moduleBaseDir, loaderFileName);
 
   const wfManifest = await fetchJson(normalizedClientModuleUrl);
-  await assets.writeTextAssetAtPath(localLoaderPath, JSON.stringify(wfManifest));
-
   const entryRef = asString(wfManifest.entry) || "mf-manifest.json";
   const entryUrl = new URL(entryRef, normalizedClientModuleUrl).toString();
-  const entryFileName = getUrlFileName(entryUrl, "mf-manifest.json");
-  const localEntryPath = path.posix.join(moduleBaseDir, entryFileName);
+  const localEntryRelativePath = getLocalEntryRelativePath(
+    normalizedClientModuleUrl,
+    entryUrl,
+    "mf-manifest.json"
+  );
+  const localEntryPath = path.posix.join(moduleBaseDir, localEntryRelativePath);
 
   const mfManifest = await fetchJson(entryUrl);
   const remotePublicPath = getFederationRemotePublicPath(mfManifest, entryUrl);
   patchFederationManifestPublicPath(mfManifest, modulePublicPath);
 
+  const rewrittenRefs = new Map<string, string>();
   const assetRefs = collectFederationAssetRefs(mfManifest);
   for (const assetRef of assetRefs) {
     const absoluteAssetUrl = new URL(assetRef, remotePublicPath).toString();
-    const localAssetPath = getLocalFederationAssetPath(moduleBaseDir, assetRef, absoluteAssetUrl);
+    const { localAssetPath, manifestRef } = getLocalFederationAssetMapping(
+      moduleBaseDir,
+      assetRef,
+      absoluteAssetUrl
+    );
+    rewrittenRefs.set(assetRef.trim(), manifestRef);
     try {
       await assets.downloadAssetToPath(absoluteAssetUrl, localAssetPath);
     } catch (error) {
@@ -389,6 +397,9 @@ async function mirrorFederatedModule(clientModuleUrl: string, assets: AssetDownl
     }
   }
 
+  rewriteFederationManifestAssetRefs(mfManifest, rewrittenRefs);
+  wfManifest.entry = toDotRelativePath(localEntryRelativePath);
+  await assets.writeTextAssetAtPath(localLoaderPath, JSON.stringify(wfManifest));
   await assets.writeTextAssetAtPath(localEntryPath, JSON.stringify(mfManifest));
   return `/${localLoaderPath}`;
 }
@@ -463,27 +474,118 @@ function getFederationRemotePublicPath(
   }
 }
 
-function getLocalFederationAssetPath(
+function getLocalFederationAssetMapping(
   moduleBaseDir: string,
   assetRef: string,
   absoluteAssetUrl: string
-): string {
+): { localAssetPath: string; manifestRef: string } {
   const trimmed = assetRef.trim();
+  const fallback = getUrlFileName(absoluteAssetUrl, "asset.bin");
 
   if (/^https?:\/\//i.test(trimmed)) {
-    const filename = getUrlFileName(trimmed, "asset.bin");
-    return path.posix.join(moduleBaseDir, filename);
+    const manifestRef = normalizeRelativeAssetPath(getUrlFileName(trimmed, fallback), fallback);
+    return {
+      localAssetPath: path.posix.join(moduleBaseDir, manifestRef),
+      manifestRef,
+    };
   }
 
-  if (trimmed.startsWith("/")) {
-    return path.posix.join(moduleBaseDir, trimmed.replace(/^\/+/, ""));
+  const withoutPrefix = trimmed.startsWith("/")
+    ? trimmed.replace(/^\/+/, "")
+    : trimmed.startsWith("./")
+      ? trimmed.slice(2)
+      : trimmed;
+  const manifestRef = normalizeRelativeAssetPath(withoutPrefix || fallback, fallback);
+  return {
+    localAssetPath: path.posix.join(moduleBaseDir, manifestRef),
+    manifestRef,
+  };
+}
+
+function rewriteFederationManifestAssetRefs(
+  manifest: Record<string, unknown>,
+  rewrittenRefs: Map<string, string>
+) {
+  rewriteAssetRefsFromList(manifest.exposes, rewrittenRefs);
+  rewriteAssetRefsFromList(manifest.shared, rewrittenRefs);
+  rewriteAssetRefsFromList(manifest.remotes, rewrittenRefs);
+
+  const metaData = asRecord(manifest.metaData);
+  const remoteEntry = asRecord(metaData?.remoteEntry);
+  if (!remoteEntry) return;
+
+  const remoteEntryName = asString(remoteEntry.name);
+  const remoteEntryPath = asString(remoteEntry.path) || "";
+  if (!remoteEntryName) return;
+
+  const remoteEntryRef = path.posix.join(remoteEntryPath, remoteEntryName).trim();
+  const rewrittenRemoteEntryRef = rewrittenRefs.get(remoteEntryRef);
+  if (!rewrittenRemoteEntryRef) return;
+
+  const normalized = normalizeRelativeAssetPath(rewrittenRemoteEntryRef, remoteEntryName);
+  remoteEntry.name = path.posix.basename(normalized);
+  const dirname = path.posix.dirname(normalized);
+  remoteEntry.path = dirname === "." ? "" : `${dirname.replace(/\/+$/, "")}/`;
+}
+
+function rewriteAssetRefsFromList(value: unknown, rewrittenRefs: Map<string, string>) {
+  if (!Array.isArray(value)) return;
+
+  for (const item of value) {
+    const itemRecord = asRecord(item);
+    const assets = asRecord(itemRecord?.assets);
+    if (!assets) continue;
+
+    rewriteAssetRefsInArray(asRecord(assets.js)?.sync, rewrittenRefs);
+    rewriteAssetRefsInArray(asRecord(assets.js)?.async, rewrittenRefs);
+    rewriteAssetRefsInArray(asRecord(assets.css)?.sync, rewrittenRefs);
+    rewriteAssetRefsInArray(asRecord(assets.css)?.async, rewrittenRefs);
+  }
+}
+
+function rewriteAssetRefsInArray(value: unknown, rewrittenRefs: Map<string, string>) {
+  if (!Array.isArray(value)) return;
+
+  for (let i = 0; i < value.length; i++) {
+    const item = value[i];
+    if (typeof item !== "string") continue;
+    const rewritten = rewrittenRefs.get(item.trim());
+    if (rewritten) {
+      value[i] = rewritten;
+    }
+  }
+}
+
+function getLocalEntryRelativePath(clientModuleUrl: string, entryUrl: string, fallbackFileName: string): string {
+  try {
+    const clientModuleParsed = new URL(clientModuleUrl);
+    const entryParsed = new URL(entryUrl);
+
+    if (clientModuleParsed.origin === entryParsed.origin) {
+      const clientModuleDir = path.posix.dirname(safeDecodeURIComponent(clientModuleParsed.pathname));
+      const entryPath = safeDecodeURIComponent(entryParsed.pathname);
+      if (entryPath.startsWith(`${clientModuleDir}/`)) {
+        const relative = entryPath.slice(clientModuleDir.length + 1);
+        return normalizeRelativeAssetPath(relative, fallbackFileName);
+      }
+    }
+  } catch {
+    // Fallback to filename below.
   }
 
-  if (trimmed.startsWith("./")) {
-    return path.posix.join(moduleBaseDir, trimmed.slice(2));
-  }
+  return normalizeRelativeAssetPath(getUrlFileName(entryUrl, fallbackFileName), fallbackFileName);
+}
 
-  return path.posix.join(moduleBaseDir, trimmed || getUrlFileName(absoluteAssetUrl, "asset.bin"));
+function normalizeRelativeAssetPath(candidate: string, fallbackFileName: string): string {
+  const normalized = path.posix.normalize(candidate).replace(/^\/+/, "");
+  if (!normalized || normalized === "." || normalized.startsWith("../")) {
+    return fallbackFileName;
+  }
+  return normalized;
+}
+
+function toDotRelativePath(relativePath: string): string {
+  return relativePath.startsWith("./") ? relativePath : `./${relativePath}`;
 }
 
 function getModulePaths(clientModuleUrl: string): {

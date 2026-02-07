@@ -78,6 +78,9 @@ function SiteDetailPage() {
   const [scheduleDays, setScheduleDays] = useState<string[]>(["1"]);
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
+  const [concurrency, setConcurrency] = useState(5);
+  const [maxPagesInput, setMaxPagesInput] = useState("");
+  const [removeWebflowBadge, setRemoveWebflowBadge] = useState(true);
   const [downloadBlacklistText, setDownloadBlacklistText] = useState("");
 
   const site = data?.site;
@@ -89,6 +92,9 @@ function SiteDetailPage() {
 
     setName(site.name);
     setUrl(site.url);
+    setConcurrency(site.concurrency ?? 5);
+    setMaxPagesInput(site.maxPages ? String(site.maxPages) : "");
+    setRemoveWebflowBadge(site.removeWebflowBadge ?? true);
     setDownloadBlacklistText((site.downloadBlacklist ?? []).join("\n"));
 
     const parsed = parseCron(site.scheduleCron ?? null);
@@ -98,8 +104,13 @@ function SiteDetailPage() {
     setScheduleDays(parsed.days);
   }, [site]);
 
-  const downloadBlacklistMutation = useMutation({
-    mutationFn: (payload: { downloadBlacklist: string[] }) => sitesApi.update(siteId, payload),
+  const configurationMutation = useMutation({
+    mutationFn: (payload: {
+      concurrency: number;
+      maxPages: number | null;
+      removeWebflowBadge: boolean;
+      downloadBlacklist: string[];
+    }) => sitesApi.update(siteId, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["sites"] });
       queryClient.invalidateQueries({ queryKey: ["sites", siteId] });
@@ -252,51 +263,82 @@ function SiteDetailPage() {
 
           <div className="bg-card border border-border rounded-lg p-6">
             <h2 className="text-lg font-semibold mb-4">Configuration</h2>
-            <dl className="space-y-3">
+            <div className="space-y-3">
               <div>
-                <dt className="text-sm text-muted-foreground">Concurrency</dt>
-                <dd className="font-medium">{site.concurrency || 5} pages</dd>
+                <label className="block text-sm text-muted-foreground mb-1">Concurrency</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={concurrency}
+                  onChange={(e) => setConcurrency(parseInt(e.target.value, 10) || 5)}
+                  className="w-full px-3 py-2 border border-input rounded-md bg-background"
+                />
+                <p className="text-xs text-muted-foreground mt-1">Pages to crawl in parallel</p>
               </div>
               <div>
-                <dt className="text-sm text-muted-foreground">Max Pages</dt>
-                <dd className="font-medium">{site.maxPages || "Unlimited"}</dd>
+                <label className="block text-sm text-muted-foreground mb-1">Max Pages</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={maxPagesInput}
+                  onChange={(e) => setMaxPagesInput(e.target.value)}
+                  className="w-full px-3 py-2 border border-input rounded-md bg-background"
+                  placeholder="Unlimited"
+                />
+                <p className="text-xs text-muted-foreground mt-1">Leave empty for unlimited</p>
               </div>
-              <div>
-                <dt className="text-sm text-muted-foreground">Remove Badge</dt>
-                <dd className="font-medium">{site.removeWebflowBadge ? "Yes" : "No"}</dd>
-              </div>
-              <div>
-                <dt className="text-sm text-muted-foreground">Download Blacklist Rules</dt>
-                <dd className="font-medium">{site.downloadBlacklist?.length ?? 0}</dd>
-              </div>
-            </dl>
-          </div>
 
-          <div className="bg-card border border-border rounded-lg p-6">
-            <h2 className="text-lg font-semibold mb-4">Download Blacklist</h2>
-            <p className="text-sm text-muted-foreground mb-3">
-              One URL rule per line. Use <code>*</code> at the end for prefix matching.
-            </p>
-            <textarea
-              value={downloadBlacklistText}
-              onChange={(e) => setDownloadBlacklistText(e.target.value)}
-              className="w-full min-h-40 px-3 py-2 border border-input rounded-md bg-background font-mono text-xs"
-              placeholder={"https://cdn.example.com/tracker.js\nhttps://cdn.example.com/embeds/*"}
-            />
-            <button
-              type="button"
-              onClick={() => {
-                const rules = downloadBlacklistText
-                  .split("\n")
-                  .map((line) => line.trim())
-                  .filter((line) => line.length > 0);
-                downloadBlacklistMutation.mutate({ downloadBlacklist: rules });
-              }}
-              disabled={downloadBlacklistMutation.isPending}
-              className="mt-3 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50"
-            >
-              {downloadBlacklistMutation.isPending ? "Saving..." : "Update Blacklist"}
-            </button>
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="removeWebflowBadge"
+                  checked={removeWebflowBadge}
+                  onChange={(e) => setRemoveWebflowBadge(e.target.checked)}
+                  className="rounded"
+                />
+                <label htmlFor="removeWebflowBadge" className="text-sm">
+                  Remove Webflow badge
+                </label>
+              </div>
+
+              <div>
+                <label className="block text-sm text-muted-foreground mb-1">Download Blacklist</label>
+                <p className="text-sm text-muted-foreground mb-3">
+                  One URL rule per line. Use <code>*</code> at the end for prefix matching.
+                </p>
+                <textarea
+                  value={downloadBlacklistText}
+                  onChange={(e) => setDownloadBlacklistText(e.target.value)}
+                  className="w-full min-h-40 px-3 py-2 border border-input rounded-md bg-background font-mono text-xs"
+                  placeholder={"https://cdn.example.com/tracker.js\nhttps://cdn.example.com/embeds/*"}
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const parsedMaxPages = maxPagesInput.trim() ? parseInt(maxPagesInput.trim(), 10) : null;
+                  const rules = downloadBlacklistText
+                    .split("\n")
+                    .map((line) => line.trim())
+                    .filter((line) => line.length > 0);
+                  configurationMutation.mutate({
+                    concurrency: Math.max(1, Math.min(20, concurrency)),
+                    maxPages:
+                      parsedMaxPages && !Number.isNaN(parsedMaxPages) && parsedMaxPages > 0
+                        ? parsedMaxPages
+                        : null,
+                    removeWebflowBadge,
+                    downloadBlacklist: rules,
+                  });
+                }}
+                disabled={configurationMutation.isPending || concurrency < 1 || concurrency > 20}
+                className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50"
+              >
+                {configurationMutation.isPending ? "Saving..." : "Update Configuration"}
+              </button>
+            </div>
           </div>
 
           <div className="bg-card border border-border rounded-lg p-6">

@@ -113,6 +113,65 @@ describe("rewriteHtmlDocument code component mirroring", () => {
     await assertFileExists(path.join(outputDir, "code-components/cdn.example.com/components/local.js"));
     await assertFileExists(path.join(outputDir, "code-components/cdn.example.com/components/styles/main.css"));
   });
+
+  it("parses federation manifests with anti-XSSI JSON prefixes", async () => {
+    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "dxd-code-components-xssi-"));
+    createdTempDirs.push(outputDir);
+
+    const responses = new Map<string, Response>([
+      [
+        "https://cdn.example.com/components/wf-manifest.json",
+        prefixedJsonResponse({
+          entry: "/federation/mf-manifest.json",
+        }),
+      ],
+      [
+        "https://cdn.example.com/federation/mf-manifest.json",
+        prefixedJsonResponse({
+          metaData: {
+            publicPath: "/federation/",
+            remoteEntry: {
+              path: "/chunks/",
+              name: "remote.js",
+            },
+          },
+          exposes: [],
+          shared: [],
+          remotes: [],
+        }),
+      ],
+      ["https://cdn.example.com/chunks/remote.js", textResponse("console.log('remote')")],
+    ]);
+
+    globalThis.fetch = async (input: RequestInfo | URL): Promise<Response> => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const response = responses.get(url);
+      if (!response) {
+        throw new Error(`Unexpected fetch URL in test: ${url}`);
+      }
+      return response.clone();
+    };
+
+    const assets = new AssetDownloader(outputDir);
+    await assets.init();
+
+    const rewritten = await rewriteHtmlDocument({
+      html: `<html><body><code-island data-loader='{"tag":"FEDERATION","val":{"clientModuleUrl":"https://cdn.example.com/components/wf-manifest.json"}}'></code-island></body></html>`,
+      pageUrl: "https://example.com/",
+      assets,
+      removeWebflowBadge: false,
+    });
+
+    const $ = load(rewritten);
+    const dataLoader = $("code-island").attr("data-loader");
+    assert.ok(dataLoader, "Expected rewritten data-loader attribute");
+
+    const parsedLoader = JSON.parse(dataLoader);
+    assert.equal(
+      parsedLoader?.val?.clientModuleUrl,
+      "./code-components/cdn.example.com/components/wf-manifest.json"
+    );
+  });
 });
 
 describe("rewriteHtmlDocument offline path normalization", () => {
@@ -180,6 +239,15 @@ describe("rewriteHtmlDocument offline path normalization", () => {
 
 function jsonResponse(data: unknown): Response {
   return new Response(JSON.stringify(data), {
+    status: 200,
+    headers: {
+      "content-type": "application/json",
+    },
+  });
+}
+
+function prefixedJsonResponse(data: unknown): Response {
+  return new Response(`)]}',\n${JSON.stringify(data)}`, {
     status: 200,
     headers: {
       "content-type": "application/json",

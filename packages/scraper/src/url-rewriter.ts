@@ -647,11 +647,29 @@ async function fetchJson(url: string): Promise<Record<string, unknown>> {
   }
 
   const text = await response.text();
-  const parsed = JSON.parse(text);
+  const parsed = JSON.parse(sanitizeJsonResponseText(text));
   if (!isRecord(parsed)) {
     throw new Error("Invalid JSON response shape");
   }
   return parsed;
+}
+
+function sanitizeJsonResponseText(text: string): string {
+  let normalized = text.trimStart();
+
+  // Strip UTF-8 BOM if present.
+  if (normalized.charCodeAt(0) === 0xfeff) {
+    normalized = normalized.slice(1);
+  }
+
+  // Some CDNs/API gateways prepend anti-XSSI prefixes.
+  if (normalized.startsWith(")]}',")) {
+    normalized = normalized.slice(5).trimStart();
+  } else if (normalized.startsWith("for(;;);")) {
+    normalized = normalized.slice(8).trimStart();
+  }
+
+  return normalized;
 }
 
 function parseJsonAttribute(value: string): unknown {

@@ -23,6 +23,7 @@ export const sites = pgTable("sites", {
   excludePatterns: text("exclude_patterns").array(),
   downloadBlacklist: text("download_blacklist").array(),
   removeWebflowBadge: boolean("remove_webflow_badge").default(true),
+  maxArchivesToKeep: integer("max_archives_to_keep"),
   redirectsCsv: text("redirects_csv"),
   scheduleEnabled: boolean("schedule_enabled").default(false),
   scheduleCron: varchar("schedule_cron", { length: 100 }),

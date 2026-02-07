@@ -1,6 +1,6 @@
 import { Worker, Job, Queue, UnrecoverableError } from "bullmq";
 import Redis from "ioredis";
-import { eq, and, inArray, lte } from "drizzle-orm";
+import { eq, and, inArray, lte, desc, isNotNull } from "drizzle-orm";
 import { crawlSite, type CrawlProgress, type LogLevel } from "@dxd/scraper";
 import { getStorage } from "@dxd/storage";
 import { db, sites, crawls, crawlLogs, settings } from "./db.js";
@@ -245,6 +245,53 @@ async function moveOutputToFinal(crawlId: string, outputDir: string): Promise<{ 
   }
 
   throw new Error(`No crawl output found in temp (${outputDir}) or final (${finalPath})`);
+}
+
+async function pruneOldArchives(siteId: string, keepCount: number, currentCrawlId: string): Promise<void> {
+  if (!Number.isFinite(keepCount) || keepCount < 1) {
+    return;
+  }
+
+  const archivedCrawls = await db.query.crawls.findMany({
+    where: and(
+      eq(crawls.siteId, siteId),
+      inArray(crawls.status, ["completed", "timed_out"]),
+      isNotNull(crawls.outputPath)
+    ),
+    orderBy: [desc(crawls.completedAt), desc(crawls.createdAt)],
+  });
+
+  const toDelete = archivedCrawls.slice(keepCount);
+  if (toDelete.length === 0) {
+    return;
+  }
+
+  for (const oldCrawl of toDelete) {
+    const outputPath = oldCrawl.outputPath;
+    if (!outputPath) {
+      continue;
+    }
+
+    await storage.deleteDir(outputPath).catch(() => undefined);
+    await storage.deleteDir(getArchivePath(outputPath)).catch(() => undefined);
+
+    await db
+      .update(crawls)
+      .set({
+        outputPath: null,
+        outputSizeBytes: null,
+      })
+      .where(eq(crawls.id, oldCrawl.id));
+
+    if (oldCrawl.id !== currentCrawlId) {
+      await publishEvent(currentCrawlId, {
+        type: "log",
+        level: "info",
+        message: `Pruned old archive from crawl ${oldCrawl.id}`,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
 }
 
 async function processCrawlJob(job: Job<CrawlJobData>) {
@@ -504,6 +551,8 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
       });
     }
 
+    await pruneOldArchives(siteId, site.maxArchivesToKeep ?? Number.POSITIVE_INFINITY, crawlId);
+
     console.log(
       `[Worker] Crawl completed: ${crawlId} - ${result.succeeded}/${result.total} pages`
     );
@@ -554,6 +603,8 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
             errorMessage,
           })
           .where(eq(crawls.id, crawlId));
+
+        await pruneOldArchives(siteId, site.maxArchivesToKeep ?? Number.POSITIVE_INFINITY, crawlId);
 
         await publishEvent(crawlId, {
           type: "log",

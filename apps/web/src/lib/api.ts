@@ -22,6 +22,7 @@ export interface Site {
   excludePatterns: string[] | null;
   downloadBlacklist: string[] | null;
   removeWebflowBadge: boolean | null;
+  maxArchivesToKeep: number | null;
   redirectsCsv: string | null;
   scheduleEnabled: boolean | null;
   scheduleCron: string | null;
@@ -66,6 +67,7 @@ export interface CreateSiteInput {
   excludePatterns?: string[];
   downloadBlacklist?: string[];
   removeWebflowBadge?: boolean;
+  maxArchivesToKeep?: number | null;
   redirectsCsv?: string | null;
   scheduleEnabled?: boolean;
   scheduleCron?: string | null;

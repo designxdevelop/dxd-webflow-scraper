@@ -47,6 +47,7 @@ function NewSitePage() {
     url: "",
     concurrency: 30,
     maxPages: null,
+    maxArchivesToKeep: null,
     removeWebflowBadge: true,
     scheduleEnabled: false,
   });
@@ -160,6 +161,27 @@ function NewSitePage() {
                 placeholder="Unlimited"
               />
               <p className="text-xs text-muted-foreground mt-1">Leave empty for unlimited</p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-1">Max Archives to Keep</label>
+              <input
+                type="number"
+                min={1}
+                max={1000}
+                value={formData.maxArchivesToKeep || ""}
+                onChange={(e) =>
+                  setFormData({
+                    ...formData,
+                    maxArchivesToKeep: e.target.value ? parseInt(e.target.value, 10) : null,
+                  })
+                }
+                className="w-full px-3 py-2 border border-input rounded-md bg-background"
+                placeholder="Unlimited"
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Oldest archives are deleted after this many are kept
+              </p>
             </div>
           </div>
 

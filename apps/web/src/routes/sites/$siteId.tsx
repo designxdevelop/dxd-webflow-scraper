@@ -81,6 +81,7 @@ function SiteDetailPage() {
   const [url, setUrl] = useState("");
   const [concurrency, setConcurrency] = useState(5);
   const [maxPagesInput, setMaxPagesInput] = useState("");
+  const [maxArchivesToKeepInput, setMaxArchivesToKeepInput] = useState("");
   const [removeWebflowBadge, setRemoveWebflowBadge] = useState(true);
   const [downloadBlacklistText, setDownloadBlacklistText] = useState("");
 
@@ -95,6 +96,9 @@ function SiteDetailPage() {
     setUrl(site.url);
     setConcurrency(site.concurrency ?? 5);
     setMaxPagesInput(site.maxPages ? String(site.maxPages) : "");
+    setMaxArchivesToKeepInput(
+      site.maxArchivesToKeep && site.maxArchivesToKeep > 0 ? String(site.maxArchivesToKeep) : ""
+    );
     setRemoveWebflowBadge(site.removeWebflowBadge ?? true);
     setDownloadBlacklistText((site.downloadBlacklist ?? []).join("\n"));
 
@@ -109,6 +113,7 @@ function SiteDetailPage() {
     mutationFn: (payload: {
       concurrency: number;
       maxPages: number | null;
+      maxArchivesToKeep: number | null;
       removeWebflowBadge: boolean;
       downloadBlacklist: string[];
     }) => sitesApi.update(siteId, payload),
@@ -290,6 +295,24 @@ function SiteDetailPage() {
                 <p className="text-xs text-muted-foreground mt-1">Leave empty for unlimited</p>
               </div>
 
+              <div>
+                <label className="block text-sm text-muted-foreground mb-1">
+                  Max Archives to Keep
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={1000}
+                  value={maxArchivesToKeepInput}
+                  onChange={(e) => setMaxArchivesToKeepInput(e.target.value)}
+                  className="w-full px-3 py-2 border border-input rounded-md bg-background"
+                  placeholder="Unlimited"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  Oldest archives are deleted after this many are kept
+                </p>
+              </div>
+
               <div className="flex items-center gap-2">
                 <input
                   type="checkbox"
@@ -320,6 +343,9 @@ function SiteDetailPage() {
                 type="button"
                 onClick={() => {
                   const parsedMaxPages = maxPagesInput.trim() ? parseInt(maxPagesInput.trim(), 10) : null;
+                  const parsedMaxArchivesToKeep = maxArchivesToKeepInput.trim()
+                    ? parseInt(maxArchivesToKeepInput.trim(), 10)
+                    : null;
                   const rules = downloadBlacklistText
                     .split("\n")
                     .map((line) => line.trim())
@@ -329,6 +355,12 @@ function SiteDetailPage() {
                     maxPages:
                       parsedMaxPages && !Number.isNaN(parsedMaxPages) && parsedMaxPages > 0
                         ? parsedMaxPages
+                        : null,
+                    maxArchivesToKeep:
+                      parsedMaxArchivesToKeep &&
+                      !Number.isNaN(parsedMaxArchivesToKeep) &&
+                      parsedMaxArchivesToKeep > 0
+                        ? parsedMaxArchivesToKeep
                         : null,
                     removeWebflowBadge,
                     downloadBlacklist: rules,

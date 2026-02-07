@@ -1,70 +1,140 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
+import { motion } from "framer-motion";
 import { crawlsApi } from "@/lib/api";
-import { History } from "lucide-react";
+import { History, ArrowRight, ExternalLink, Download, Eye, Clock } from "lucide-react";
 
 export const Route = createFileRoute("/crawls/")({
   component: CrawlsPage,
 });
 
+const containerVariants = {
+  hidden: { opacity: 0 },
+  visible: {
+    opacity: 1,
+    transition: {
+      staggerChildren: 0.02,
+      delayChildren: 0.1,
+    },
+  },
+};
+
+const itemVariants = {
+  hidden: { opacity: 0, y: 5 },
+  visible: {
+    opacity: 1,
+    y: 0,
+    transition: {
+      duration: 0.2,
+      ease: "easeOut" as const,
+    },
+  },
+};
+
 function CrawlsPage() {
   const { data, isLoading } = useQuery({
     queryKey: ["crawls"],
     queryFn: () => crawlsApi.list({ limit: 50 }),
-    refetchInterval: 5000, // Refresh every 5 seconds for running crawls
+    refetchInterval: 5000,
   });
 
   const crawls = data?.crawls || [];
 
-  return (
-    <div className="p-8">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold text-foreground">Crawls</h1>
-        <p className="text-muted-foreground mt-1">View all crawl jobs and their status</p>
-      </div>
+  const runningCount = crawls.filter((c) => c.status === "running").length;
+  const completedCount = crawls.filter((c) => c.status === "completed").length;
+  const failedCount = crawls.filter((c) => c.status === "failed").length;
 
-      {isLoading ? (
-        <div className="text-muted-foreground">Loading...</div>
-      ) : crawls.length === 0 ? (
-        <div className="text-center py-12 bg-card border border-border rounded-lg">
-          <History size={48} className="mx-auto text-muted-foreground mb-4" />
-          <h3 className="text-lg font-medium mb-2">No crawls yet</h3>
-          <p className="text-muted-foreground mb-4">
-            Start a crawl from the Sites page to see it here
-          </p>
+  return (
+    <div className="p-8 max-w-7xl mx-auto">
+      {/* Header */}
+      <motion.div
+        initial={{ opacity: 0, y: -10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3 }}
+        className="mb-8"
+      >
+        <div className="flex items-start justify-between">
+          <div>
+            <span className="text-xs font-mono" style={{ color: "#6366f1" }}>
+              crawls/history
+            </span>
+            <h1 className="text-2xl font-bold mt-1 mb-1" style={{ color: "#fafafa" }}>
+              Crawls
+            </h1>
+            <p className="text-sm" style={{ color: "#71717a" }}>
+              View crawl operations and archives
+            </p>
+          </div>
+
           <Link
             to="/sites"
-            className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
+            className="btn-secondary"
           >
-            Go to Sites
+            Start New Crawl
+            <ArrowRight size={16} />
           </Link>
         </div>
+
+        {/* Stats */}
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1, duration: 0.3 }}
+          className="flex gap-6 mt-4"
+        >
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full" style={{ backgroundColor: "#3b82f6", boxShadow: "0 0 6px #3b82f6" }} />
+            <span className="text-sm font-mono" style={{ color: "#71717a" }}>
+              <span style={{ color: "#fafafa" }}>{runningCount}</span> running
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full" style={{ backgroundColor: "#22c55e" }} />
+            <span className="text-sm font-mono" style={{ color: "#71717a" }}>
+              <span style={{ color: "#fafafa" }}>{completedCount}</span> completed
+            </span>
+          </div>
+          {failedCount > 0 && (
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full" style={{ backgroundColor: "#ef4444" }} />
+              <span className="text-sm font-mono" style={{ color: "#71717a" }}>
+                <span style={{ color: "#fafafa" }}>{failedCount}</span> failed
+              </span>
+            </div>
+          )}
+        </motion.div>
+      </motion.div>
+
+      {isLoading ? (
+        <div className="flex items-center justify-center py-20">
+          <motion.div
+            animate={{ rotate: 360 }}
+            transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
+            className="w-8 h-8 border-2 rounded-full"
+            style={{ borderColor: "#27272a", borderTopColor: "#6366f1" }}
+          />
+        </div>
+      ) : crawls.length === 0 ? (
+        <EmptyState />
       ) : (
-        <div className="bg-card border border-border rounded-lg overflow-hidden">
-          <table className="w-full">
-            <thead className="bg-muted/50">
+        <motion.div
+          variants={containerVariants}
+          initial="hidden"
+          animate="visible"
+          className="card-dark overflow-hidden"
+        >
+          <table className="table-dark">
+            <thead>
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                  Site
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                  Status
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                  Progress
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                  Started
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                  Duration
-                </th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                  Actions
-                </th>
+                <th>Site</th>
+                <th>Status</th>
+                <th>Progress</th>
+                <th>Started</th>
+                <th>Duration</th>
+                <th className="text-right">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-border">
+            <tbody>
               {crawls.map((crawl) => {
                 const duration = crawl.completedAt && crawl.startedAt
                   ? formatDuration(new Date(crawl.completedAt).getTime() - new Date(crawl.startedAt).getTime())
@@ -72,50 +142,95 @@ function CrawlsPage() {
                     ? formatDuration(Date.now() - new Date(crawl.startedAt).getTime())
                     : "-";
 
+                const progress = crawl.totalPages
+                  ? Math.round(((crawl.succeededPages || 0) / crawl.totalPages) * 100)
+                  : 0;
+
                 return (
-                  <tr key={crawl.id} className="hover:bg-muted/30">
-                    <td className="px-6 py-4">
+                  <motion.tr
+                    key={crawl.id}
+                    variants={itemVariants}
+                    className="group"
+                  >
+                    <td>
                       <Link
                         to="/crawls/$crawlId"
                         params={{ crawlId: crawl.id }}
-                        className="font-medium text-foreground hover:text-primary"
+                        className="flex flex-col"
                       >
-                        {crawl.site?.name || "Unknown Site"}
+                        <span className="font-medium text-sm group-hover:underline" style={{ color: "#fafafa" }}>
+                          {crawl.site?.name || "Unknown"}
+                        </span>
+                        <span className="text-xs font-mono" style={{ color: "#52525b" }}>
+                          #{crawl.id.slice(0, 8)}
+                        </span>
                       </Link>
                     </td>
-                    <td className="px-6 py-4">
+                    <td>
                       <StatusBadge status={crawl.status || "unknown"} />
                     </td>
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-2">
-                        <div className="w-24 h-2 bg-muted rounded-full overflow-hidden">
+                    <td>
+                      <div className="flex items-center gap-3">
+                        <div className="w-20 progress-dark">
                           <div
-                            className="h-full bg-primary transition-all"
+                            className="progress-dark-fill"
                             style={{
-                              width: `${crawl.totalPages ? ((crawl.succeededPages || 0) / crawl.totalPages) * 100 : 0}%`,
+                              width: `${progress}%`,
+                              background: crawl.status === "failed"
+                                ? "linear-gradient(90deg, #ef4444 0%, #f87171 100%)"
+                                : crawl.status === "completed"
+                                  ? "linear-gradient(90deg, #22c55e 0%, #4ade80 100%)"
+                                  : undefined,
                             }}
                           />
                         </div>
-                        <span className="text-sm text-muted-foreground">
+                        <span className="text-xs font-mono" style={{ color: "#71717a" }}>
                           {crawl.succeededPages ?? 0}/{crawl.totalPages ?? "?"}
                         </span>
                       </div>
                     </td>
-                    <td className="px-6 py-4 text-sm text-muted-foreground">
-                      {crawl.startedAt
-                        ? new Date(crawl.startedAt).toLocaleString()
-                        : "Pending"}
+                    <td>
+                      <div className="flex items-center gap-2 text-sm font-mono" style={{ color: "#71717a" }}>
+                        <Clock size={14} />
+                        {crawl.startedAt ? (
+                          <span>
+                            {new Date(crawl.startedAt).toLocaleDateString("en-US", {
+                              month: "short",
+                              day: "numeric",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                          </span>
+                        ) : (
+                          "pending"
+                        )}
+                      </div>
                     </td>
-                    <td className="px-6 py-4 text-sm text-muted-foreground">
-                      {duration}
+                    <td>
+                      <span className="text-sm font-mono" style={{ color: "#71717a" }}>
+                        {duration}
+                      </span>
                     </td>
-                    <td className="px-6 py-4 text-right">
+                    <td>
                       <div className="flex items-center justify-end gap-2">
                         <Link
                           to="/crawls/$crawlId"
                           params={{ crawlId: crawl.id }}
-                          className="text-sm text-primary hover:underline"
+                          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-medium transition-colors"
+                          style={{
+                            backgroundColor: "#27272a",
+                            color: "#a1a1aa",
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.backgroundColor = "#3f3f46";
+                            e.currentTarget.style.color = "#fafafa";
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.backgroundColor = "#27272a";
+                            e.currentTarget.style.color = "#a1a1aa";
+                          }}
                         >
+                          <Eye size={14} />
                           View
                         </Link>
                         {crawl.status === "completed" && (
@@ -124,45 +239,140 @@ function CrawlsPage() {
                               href={crawlsApi.getPreviewUrl(crawl.id)}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="text-sm text-primary hover:underline"
+                              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-medium transition-colors"
+                              style={{
+                                backgroundColor: "rgba(34, 197, 94, 0.1)",
+                                color: "#22c55e",
+                              }}
+                              onMouseEnter={(e) => {
+                                e.currentTarget.style.backgroundColor = "rgba(34, 197, 94, 0.2)";
+                              }}
+                              onMouseLeave={(e) => {
+                                e.currentTarget.style.backgroundColor = "rgba(34, 197, 94, 0.1)";
+                              }}
                             >
+                              <ExternalLink size={14} />
                               Preview
                             </a>
                             <a
                               href={crawlsApi.getDownloadUrl(crawl.id)}
-                              className="text-sm text-primary hover:underline"
+                              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-medium transition-colors"
+                              style={{
+                                backgroundColor: "rgba(99, 102, 241, 0.1)",
+                                color: "#818cf8",
+                              }}
+                              onMouseEnter={(e) => {
+                                e.currentTarget.style.backgroundColor = "rgba(99, 102, 241, 0.2)";
+                              }}
+                              onMouseLeave={(e) => {
+                                e.currentTarget.style.backgroundColor = "rgba(99, 102, 241, 0.1)";
+                              }}
                             >
+                              <Download size={14} />
                               Download
                             </a>
                           </>
                         )}
                       </div>
                     </td>
-                  </tr>
+                  </motion.tr>
                 );
               })}
             </tbody>
           </table>
-        </div>
+        </motion.div>
       )}
     </div>
   );
 }
 
+function EmptyState() {
+  return (
+    <motion.div
+      initial={{ opacity: 0, scale: 0.95 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ duration: 0.3 }}
+      className="text-center py-20 px-8 card-dark"
+    >
+      <motion.div
+        initial={{ y: 20, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ delay: 0.1 }}
+      >
+        <div
+          className="w-16 h-16 mx-auto mb-4 rounded-xl flex items-center justify-center"
+          style={{ backgroundColor: "#27272a" }}
+        >
+          <History size={32} style={{ color: "#6366f1" }} />
+        </div>
+        <h3 className="text-lg font-bold mb-2" style={{ color: "#fafafa" }}>
+          No crawls yet
+        </h3>
+        <p className="text-sm mb-6 max-w-md mx-auto" style={{ color: "#71717a" }}>
+          Start a crawl from the Sites page
+        </p>
+        <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+          <Link
+            to="/sites"
+            className="btn-primary"
+            style={{
+              backgroundColor: "#6366f1",
+            }}
+          >
+            <ArrowRight size={16} />
+            Go to Sites
+          </Link>
+        </motion.div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
 function StatusBadge({ status }: { status: string }) {
-  const styles: Record<string, string> = {
-    pending: "bg-yellow-100 text-yellow-800",
-    running: "bg-blue-100 text-blue-800",
-    uploading: "bg-indigo-100 text-indigo-800",
-    completed: "bg-green-100 text-green-800",
-    failed: "bg-red-100 text-red-800",
-    cancelled: "bg-gray-100 text-gray-800",
+  const styles: Record<string, { bg: string; color: string }> = {
+    pending: {
+      bg: "rgba(245, 158, 11, 0.15)",
+      color: "#fbbf24",
+    },
+    running: {
+      bg: "rgba(59, 130, 246, 0.15)",
+      color: "#60a5fa",
+    },
+    uploading: {
+      bg: "rgba(59, 130, 246, 0.15)",
+      color: "#60a5fa",
+    },
+    completed: {
+      bg: "rgba(34, 197, 94, 0.15)",
+      color: "#4ade80",
+    },
+    failed: {
+      bg: "rgba(239, 68, 68, 0.15)",
+      color: "#f87171",
+    },
+    cancelled: {
+      bg: "rgba(113, 113, 122, 0.15)",
+      color: "#a1a1aa",
+    },
   };
+
+  const style = styles[status] || styles.pending;
 
   return (
     <span
-      className={`px-2 py-1 rounded-full text-xs font-medium ${styles[status] || styles.pending}`}
+      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-mono"
+      style={{
+        backgroundColor: style.bg,
+        color: style.color,
+      }}
     >
+      <span
+        className={`w-1 h-1 rounded-full ${status === "running" ? "animate-pulse" : ""}`}
+        style={{ 
+          backgroundColor: style.color,
+          boxShadow: status === "running" ? `0 0 6px ${style.color}` : undefined
+        }}
+      />
       {status}
     </span>
   );

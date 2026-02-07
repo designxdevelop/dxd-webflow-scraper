@@ -90,7 +90,8 @@ export function useCrawlLogs(crawlId: string | null): UseCrawlLogsResult {
       if (isClosed) return;
       setConnected(false);
       setError(new Error("Connection lost"));
-      eventSource.close();
+      // Let EventSource retry automatically. Closing here prevents reconnection
+      // and can leave the UI stuck in "Connecting..." for active crawls.
     };
 
     return () => {

@@ -1,6 +1,8 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { motion } from "framer-motion";
 import { useEffect } from "react";
 import { signIn, useSession } from "../lib/auth";
+import { Box, Lock } from "lucide-react";
 
 export const Route = createFileRoute("/login")({
   component: LoginPage,
@@ -10,7 +12,6 @@ function LoginPage() {
   const { data: session, isLoading } = useSession();
   const navigate = useNavigate();
 
-  // Redirect if already logged in
   useEffect(() => {
     if (session?.user) {
       navigate({ to: "/" });
@@ -19,21 +20,97 @@ function LoginPage() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-zinc-950">
-        <div className="text-zinc-400">Loading...</div>
+      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: "#09090b" }}>
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="flex flex-col items-center gap-4"
+        >
+          <motion.div
+            animate={{ rotate: 360 }}
+            transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+            className="relative"
+          >
+            <div className="absolute inset-0 blur-xl" style={{ background: "#6366f1", opacity: 0.5 }} />
+            <Box size={32} style={{ color: "#6366f1" }} className="relative" />
+          </motion.div>
+          <p style={{ color: "#71717a", fontFamily: "JetBrains Mono, monospace" }}>Loading...</p>
+        </motion.div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-zinc-950">
-      <div className="max-w-md w-full space-y-8 p-8">
-        <div className="text-center">
-          <h1 className="text-3xl font-bold text-white">DXD Client Site Archiver</h1>
-        </div>
+    <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: "#09090b" }}>
+      {/* Background gradient */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div 
+          className="absolute top-0 left-1/4 w-96 h-96 rounded-full opacity-20"
+          style={{
+            background: "radial-gradient(circle, #6366f1 0%, transparent 70%)",
+            filter: "blur(60px)",
+          }}
+        />
+        <div 
+          className="absolute bottom-0 right-1/4 w-80 h-80 rounded-full opacity-10"
+          style={{
+            background: "radial-gradient(circle, #8b5cf6 0%, transparent 70%)",
+            filter: "blur(60px)",
+          }}
+        />
+      </div>
 
-        <div className="mt-8 space-y-4">
-          <button onClick={() => signIn()} className="w-full flex items-center justify-center gap-3 px-4 py-3 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg transition-colors border border-zinc-700">
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4 }}
+        className="relative w-full max-w-md mx-4"
+      >
+        <div
+          className="rounded-2xl p-8"
+          style={{
+            backgroundColor: "#18181b",
+            border: "1px solid #27272a",
+          }}
+        >
+          {/* Logo */}
+          <motion.div
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ delay: 0.1 }}
+            className="flex flex-col items-center mb-8"
+          >
+            <div
+              className="w-14 h-14 rounded-xl flex items-center justify-center mb-4"
+              style={{
+                background: "linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)",
+              }}
+            >
+              <Box size={28} style={{ color: "white" }} />
+            </div>
+            <h1 className="text-xl font-bold text-center mb-1" style={{ color: "#fafafa" }}>
+              Scraper
+            </h1>
+            <p className="text-xs font-mono text-center" style={{ color: "#71717a" }}>
+              Webflow Site Archiver
+            </p>
+          </motion.div>
+
+          {/* GitHub Button */}
+          <motion.button
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2 }}
+            whileHover={{ scale: 1.01 }}
+            whileTap={{ scale: 0.99 }}
+            onClick={() => signIn()}
+            className="w-full flex items-center justify-center gap-3 px-4 py-3.5 rounded-lg text-sm font-medium transition-all"
+            style={{
+              backgroundColor: "#27272a",
+              color: "#fafafa",
+              border: "1px solid #3f3f46",
+            }}
+          >
             <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
               <path
                 fillRule="evenodd"
@@ -42,11 +119,21 @@ function LoginPage() {
               />
             </svg>
             Sign in with GitHub
-          </button>
+          </motion.button>
 
-          <p className="text-center text-sm text-zinc-500">Only @designxdevelop.com email addresses are allowed</p>
+          {/* Security note */}
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.3 }}
+            className="mt-6 flex items-center justify-center gap-2 text-xs"
+            style={{ color: "#71717a" }}
+          >
+            <Lock size={12} />
+            <span className="font-mono">@designxdevelop.com required</span>
+          </motion.div>
         </div>
-      </div>
+      </motion.div>
     </div>
   );
 }

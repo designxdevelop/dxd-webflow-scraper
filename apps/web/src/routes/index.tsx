@@ -1,11 +1,35 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
+import { motion } from "framer-motion";
 import { sitesApi, crawlsApi } from "@/lib/api";
-import { Globe, CheckCircle, Clock, ArrowRight } from "lucide-react";
+import { Globe, Clock, ArrowRight, Activity, TrendingUp, Layers, Plus } from "lucide-react";
 
 export const Route = createFileRoute("/")({
   component: DashboardPage,
 });
+
+const containerVariants = {
+  hidden: { opacity: 0 },
+  visible: {
+    opacity: 1,
+    transition: {
+      staggerChildren: 0.05,
+      delayChildren: 0.1,
+    },
+  },
+};
+
+const itemVariants = {
+  hidden: { opacity: 0, y: 10 },
+  visible: {
+    opacity: 1,
+    y: 0,
+    transition: {
+      duration: 0.3,
+      ease: "easeOut" as const,
+    },
+  },
+};
 
 function DashboardPage() {
   const { data: sitesData } = useQuery({
@@ -24,110 +48,254 @@ function DashboardPage() {
   const runningCrawls = recentCrawls.filter((c) => c.status === "running").length;
   const completedCrawls = recentCrawls.filter((c) => c.status === "completed").length;
 
+  const successRate = recentCrawls.length > 0
+    ? Math.round((completedCrawls / recentCrawls.length) * 100)
+    : 0;
+
   return (
-    <div className="p-8">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
-        <p className="text-muted-foreground mt-1">Overview of your Webflow site archives</p>
-      </div>
-
-      {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-        <StatCard
-          title="Total Sites"
-          value={sites.length}
-          icon={<Globe className="text-primary" size={24} />}
-        />
-        <StatCard
-          title="Running Crawls"
-          value={runningCrawls}
-          icon={<Clock className="text-yellow-500" size={24} />}
-        />
-        <StatCard
-          title="Completed Today"
-          value={completedCrawls}
-          icon={<CheckCircle className="text-green-500" size={24} />}
-        />
-      </div>
-
-      {/* Recent activity */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* Sites */}
-        <div className="bg-card border border-border rounded-lg p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold">Sites</h2>
-            <Link
-              to="/sites"
-              className="text-sm text-primary hover:underline flex items-center gap-1"
-            >
-              View all <ArrowRight size={14} />
-            </Link>
+    <div className="p-8 max-w-7xl mx-auto">
+      {/* Header Section */}
+      <motion.div
+        initial={{ opacity: 0, y: -10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3 }}
+        className="mb-8"
+      >
+        <div className="flex items-start justify-between">
+          <div>
+            <div className="flex items-center gap-3 mb-2">
+              <span className="text-xs font-mono" style={{ color: "#6366f1" }}>
+                dashboard/overview
+              </span>
+              <div className="flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-mono" style={{ 
+                backgroundColor: "rgba(34, 197, 94, 0.1)",
+                color: "#22c55e"
+              }}>
+                <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ backgroundColor: "#22c55e" }} />
+                online
+              </div>
+            </div>
+            <h1 className="text-2xl font-bold mb-1" style={{ color: "#fafafa" }}>
+              Dashboard
+            </h1>
+            <p className="text-sm" style={{ color: "#71717a" }}>
+              Manage <span className="font-mono" style={{ color: "#a1a1aa" }}>{sites.length}</span> sites
+              {runningCrawls > 0 && (
+                <>, <span className="font-mono" style={{ color: "#3b82f6" }}>{runningCrawls}</span> running</>
+              )}
+            </p>
           </div>
 
-          {sites.length === 0 ? (
-            <p className="text-muted-foreground text-sm">No sites configured yet.</p>
-          ) : (
-            <ul className="space-y-3">
-              {sites.slice(0, 5).map((site) => (
-                <li key={site.id} className="flex items-center justify-between">
-                  <div>
-                    <Link
-                      to="/sites/$siteId"
-                      params={{ siteId: site.id }}
-                      className="font-medium hover:text-primary"
-                    >
-                      {site.name}
-                    </Link>
-                    <p className="text-sm text-muted-foreground truncate max-w-[200px]">
-                      {site.url}
-                    </p>
-                  </div>
-                  {site.lastCrawl && (
-                    <StatusBadge status={site.lastCrawl.status || "unknown"} />
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        {/* Recent Crawls */}
-        <div className="bg-card border border-border rounded-lg p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold">Recent Crawls</h2>
+          <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
             <Link
-              to="/crawls"
-              className="text-sm text-primary hover:underline flex items-center gap-1"
+              to="/sites/new"
+              className="btn-primary"
             >
-              View all <ArrowRight size={14} />
+              <Plus size={16} />
+              New Site
             </Link>
-          </div>
-
-          {recentCrawls.length === 0 ? (
-            <p className="text-muted-foreground text-sm">No crawls yet.</p>
-          ) : (
-            <ul className="space-y-3">
-              {recentCrawls.map((crawl) => (
-                <li key={crawl.id} className="flex items-center justify-between">
-                  <div>
-                    <Link
-                      to="/crawls/$crawlId"
-                      params={{ crawlId: crawl.id }}
-                      className="font-medium hover:text-primary"
-                    >
-                      {crawl.site?.name || "Unknown Site"}
-                    </Link>
-                    <p className="text-sm text-muted-foreground">
-                      {crawl.succeededPages ?? 0}/{crawl.totalPages ?? "?"} pages
-                    </p>
-                  </div>
-                  <StatusBadge status={crawl.status || "unknown"} />
-                </li>
-              ))}
-            </ul>
-          )}
+          </motion.div>
         </div>
-      </div>
+      </motion.div>
+
+      <motion.div
+        variants={containerVariants}
+        initial="hidden"
+        animate="visible"
+      >
+        {/* Stats Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+          <StatCard
+            title="Total Sites"
+            value={sites.length}
+            subtitle="Configured"
+            icon={<Globe size={18} />}
+            color="#22c55e"
+          />
+          <StatCard
+            title="Active Crawls"
+            value={runningCrawls}
+            subtitle="In progress"
+            icon={<Activity size={18} />}
+            color="#3b82f6"
+          />
+          <StatCard
+            title="Success Rate"
+            value={`${successRate}%`}
+            subtitle="Last 5 crawls"
+            icon={<TrendingUp size={18} />}
+            color="#a855f7"
+          />
+          <StatCard
+            title="Total Crawls"
+            value={recentCrawls.length}
+            subtitle="Completed"
+            icon={<Layers size={18} />}
+            color="#f59e0b"
+          />
+        </div>
+
+        {/* Main Content Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Sites Section */}
+          <motion.div variants={itemVariants}>
+            <div className="card-dark p-6">
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-lg" style={{ backgroundColor: "rgba(34, 197, 94, 0.1)" }}>
+                    <Globe size={18} style={{ color: "#22c55e" }} />
+                  </div>
+                  <div>
+                    <h2 className="text-sm font-semibold" style={{ color: "#fafafa" }}>Sites</h2>
+                    <p className="text-xs font-mono" style={{ color: "#71717a" }}>Monitored</p>
+                  </div>
+                </div>                <Link
+                  to="/sites"
+                  className="flex items-center gap-1 text-xs font-medium transition-colors hover:opacity-80"
+                  style={{ color: "#818cf8" }}
+                >
+                  View all
+                  <ArrowRight size={14} />
+                </Link>
+              </div>
+
+              {sites.length === 0 ? (
+                <EmptyState icon={<Globe size={24} />} text="No sites configured" />
+              ) : (
+                <div className="space-y-2">
+                  {sites.slice(0, 5).map((site) => (
+                    <motion.div
+                      key={site.id}
+                      whileHover={{ x: 2 }}
+                      transition={{ duration: 0.15 }}
+                    >
+                      <Link
+                        to="/sites/$siteId"
+                        params={{ siteId: site.id }}
+                        className="flex items-center justify-between p-3 rounded-lg transition-colors"
+                        style={{ backgroundColor: "#18181b" }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = "#27272a";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = "#18181b";
+                        }}
+                      >
+                        <div className="flex items-center gap-3">
+                          <div
+                            className="w-8 h-8 rounded-md flex items-center justify-center text-sm font-bold font-mono"
+                            style={{
+                              backgroundColor: "#27272a",
+                              color: "#818cf8",
+                            }}
+                          >
+                            {site.name.charAt(0).toUpperCase()}
+                          </div>
+                          <div>
+                            <p className="font-medium text-sm" style={{ color: "#fafafa" }}>
+                              {site.name}
+                            </p>
+                            <p className="text-xs font-mono truncate max-w-[180px]" style={{ color: "#71717a" }}>
+                              {site.url}
+                            </p>
+                          </div>
+                        </div>
+                        {site.lastCrawl ? (
+                          <StatusBadge status={site.lastCrawl.status || "unknown"} />
+                        ) : (
+                          <span className="text-xs font-mono" style={{ color: "#52525b" }}>never</span>
+                        )}
+                      </Link>
+                    </motion.div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </motion.div>
+
+          {/* Recent Crawls Section */}
+          <motion.div variants={itemVariants}>
+            <div className="card-dark p-6">
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-lg" style={{ backgroundColor: "rgba(59, 130, 246, 0.1)" }}>
+                    <Clock size={18} style={{ color: "#3b82f6" }} />
+                  </div>
+                  <div>
+                    <h2 className="text-sm font-semibold" style={{ color: "#fafafa" }}>Recent Crawls</h2>
+                    <p className="text-xs font-mono" style={{ color: "#71717a" }}>Latest activity</p>
+                  </div>
+                </div>
+                <Link
+                  to="/crawls"
+                  className="flex items-center gap-1 text-xs font-medium transition-colors hover:opacity-80"
+                  style={{ color: "#818cf8" }}
+                >
+                  View all
+                  <ArrowRight size={14} />
+                </Link>
+              </div>
+
+              {recentCrawls.length === 0 ? (
+                <EmptyState icon={<Clock size={24} />} text="No crawls yet" />
+              ) : (
+                <div className="space-y-2">
+                  {recentCrawls.map((crawl) => (
+                    <motion.div
+                      key={crawl.id}
+                      whileHover={{ x: 2 }}
+                      transition={{ duration: 0.15 }}
+                    >
+                      <Link
+                        to="/crawls/$crawlId"
+                        params={{ crawlId: crawl.id }}
+                        className="block p-3 rounded-lg transition-colors"
+                        style={{ backgroundColor: "#18181b" }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = "#27272a";
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = "#18181b";
+                        }}
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="font-medium text-sm" style={{ color: "#fafafa" }}>
+                            {crawl.site?.name || "Unknown"}
+                          </p>
+                          <StatusBadge status={crawl.status || "unknown"} />
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-mono" style={{ color: "#71717a" }}>
+                            {crawl.succeededPages ?? 0}/{crawl.totalPages ?? "?"} pages
+                          </span>
+                          <span className="text-xs font-mono" style={{ color: "#52525b" }}>
+                            {crawl.startedAt
+                              ? new Date(crawl.startedAt).toLocaleDateString("en-US", {
+                                  month: "short",
+                                  day: "numeric",
+                                })
+                              : "pending"}
+                          </span>
+                        </div>
+                        {crawl.totalPages && crawl.totalPages > 0 && (
+                          <div className="mt-2 progress-dark">
+                            <div
+                              className="progress-dark-fill"
+                              style={{
+                                width: `${((crawl.succeededPages || 0) / crawl.totalPages) * 100}%`,
+                              }}
+                            />
+                          </div>
+                        )}
+                      </Link>
+                    </motion.div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </motion.div>
+        </div>
+      </motion.div>
     </div>
   );
 }
@@ -135,38 +303,102 @@ function DashboardPage() {
 function StatCard({
   title,
   value,
+  subtitle,
   icon,
+  color,
 }: {
   title: string;
-  value: number;
+  value: string | number;
+  subtitle: string;
   icon: React.ReactNode;
+  color: string;
 }) {
   return (
-    <div className="bg-card border border-border rounded-lg p-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm text-muted-foreground">{title}</p>
-          <p className="text-3xl font-bold mt-1">{value}</p>
+    <motion.div
+      variants={itemVariants}
+      whileHover={{ y: -2 }}
+      transition={{ duration: 0.15 }}
+      className="card-dark p-5"
+    >
+      <div className="flex items-start justify-between mb-3">
+        <div
+          className="p-2 rounded-lg"
+          style={{
+            backgroundColor: `${color}15`,
+          }}
+        >
+          <span style={{ color }}>{icon}</span>
         </div>
-        {icon}
       </div>
+
+      <div>
+        <p className="text-2xl font-bold font-mono mb-0.5" style={{ color: "#fafafa" }}>
+          {value}
+        </p>
+        <p className="text-sm font-medium mb-0.5" style={{ color: "#a1a1aa" }}>
+          {title}
+        </p>
+        <p className="text-xs font-mono" style={{ color: "#71717a" }}>
+          {subtitle}
+        </p>
+      </div>
+    </motion.div>
+  );
+}
+
+function EmptyState({ icon, text }: { icon: React.ReactNode; text: string }) {
+  return (
+    <div 
+      className="text-center py-8 rounded-lg"
+      style={{ backgroundColor: "#18181b", border: "1px dashed #27272a" }}
+    >
+      <div className="mb-2" style={{ color: "#52525b" }}>{icon}</div>
+      <p className="text-xs font-mono" style={{ color: "#71717a" }}>{text}</p>
     </div>
   );
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const styles: Record<string, string> = {
-    pending: "bg-yellow-100 text-yellow-800",
-    running: "bg-blue-100 text-blue-800",
-    completed: "bg-green-100 text-green-800",
-    failed: "bg-red-100 text-red-800",
-    cancelled: "bg-gray-100 text-gray-800",
+  const styles: Record<string, { bg: string; color: string }> = {
+    pending: {
+      bg: "rgba(245, 158, 11, 0.15)",
+      color: "#fbbf24",
+    },
+    running: {
+      bg: "rgba(59, 130, 246, 0.15)",
+      color: "#60a5fa",
+    },
+    completed: {
+      bg: "rgba(34, 197, 94, 0.15)",
+      color: "#4ade80",
+    },
+    failed: {
+      bg: "rgba(239, 68, 68, 0.15)",
+      color: "#f87171",
+    },
+    cancelled: {
+      bg: "rgba(113, 113, 122, 0.15)",
+      color: "#a1a1aa",
+    },
   };
+
+  const style = styles[status] || styles.pending;
 
   return (
     <span
-      className={`px-2 py-1 rounded-full text-xs font-medium ${styles[status] || styles.pending}`}
+      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-mono"
+      style={{
+        backgroundColor: style.bg,
+        color: style.color,
+      }}
     >
+      <span
+        className={`w-1 h-1 rounded-full ${status === "running" ? "animate-pulse" : ""}`}
+        style={{ 
+          backgroundColor: style.color,
+          boxShadow: status === "running" ? `0 0 6px ${style.color}` : undefined
+        }}
+      />
       {status}
     </span>
   );

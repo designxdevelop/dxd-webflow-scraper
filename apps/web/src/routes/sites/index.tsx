@@ -37,6 +37,7 @@ function SitesPage() {
   const { data, isLoading } = useQuery({
     queryKey: ["sites"],
     queryFn: sitesApi.list,
+    refetchInterval: 10000,
   });
 
   const deleteMutation = useMutation({

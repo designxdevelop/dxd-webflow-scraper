@@ -13,13 +13,14 @@ export type {
   AssetCategory,
   LogLevel,
   PageResult,
+  DynamicContentDetection,
 } from "./types.js";
 
 // Utilities (for advanced usage)
 export { AssetDownloader } from "./asset-downloader.js";
 export { AssetCache } from "./asset-cache.js";
 export { rewriteHtmlDocument } from "./url-rewriter.js";
-export { processPage, buildRelativeFilePath } from "./page-processor.js";
+export { processPage, buildRelativeFilePath, detectDynamicContent } from "./page-processor.js";
 export { extractLinks } from "./link-extractor.js";
 export { setLogCallback } from "./logger.js";
 export {

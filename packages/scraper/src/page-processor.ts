@@ -30,7 +30,9 @@ interface PageProcessorOptions {
 export function detectDynamicContent(html: string): DynamicContentDetection {
   const reasons: string[] = [];
 
-  // Federated module elements that need JS execution to render
+  // Federated module elements are handled by the static rewriter pipeline.
+  // Running them in Playwright and serializing post-hydration DOM can remove
+  // mount roots required for replay.
   if (/<code-island[\s>]/i.test(html)) {
     reasons.push("code-island");
   }
@@ -61,6 +63,14 @@ export function detectDynamicContent(html: string): DynamicContentDetection {
   }
 
   return { isDynamic: reasons.length > 0, reasons };
+}
+
+function shouldUsePlaywrightForDetection(detection: DynamicContentDetection): boolean {
+  if (!detection.isDynamic) return false;
+
+  // A page that is only "dynamic" due to code-islands should still use static
+  // HTML capture to preserve original island mount roots.
+  return detection.reasons.some((reason) => reason !== "code-island");
 }
 
 /**
@@ -102,7 +112,7 @@ async function tryStaticPath(options: PageProcessorOptions): Promise<PageResult 
     const html = await res.text();
     const detection = detectDynamicContent(html);
 
-    if (detection.isDynamic) {
+    if (shouldUsePlaywrightForDetection(detection)) {
       log.debug(
         `Page ${url} has dynamic content (${detection.reasons.join(", ")}), using Playwright`,
         url,
@@ -110,7 +120,11 @@ async function tryStaticPath(options: PageProcessorOptions): Promise<PageResult 
       return null;
     }
 
-    log.debug(`Page ${url} is static, using fast path`, url);
+    if (detection.reasons.includes("code-island")) {
+      log.debug(`Page ${url} has code-island markers but will use static path to preserve mount roots`, url);
+    } else {
+      log.debug(`Page ${url} is static, using fast path`, url);
+    }
 
     const rewritten = await rewriteHtmlDocument({ html, pageUrl: url, assets, removeWebflowBadge });
     const relativePath = buildRelativeFilePath(url);

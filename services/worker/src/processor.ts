@@ -270,8 +270,9 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
     throw new UnrecoverableError(`Crawl not found: ${crawlId}`);
   }
 
-  if (crawl.status === "cancelled") {
-    console.log(`[Worker] Skipping cancelled crawl ${crawlId}`);
+  const activeStatuses = new Set(["pending", "running", "uploading"]);
+  if (!activeStatuses.has(crawl.status ?? "pending")) {
+    console.log(`[Worker] Skipping crawl ${crawlId}; current status is ${crawl.status}`);
     return;
   }
 
@@ -451,29 +452,6 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
     await assertCrawlIsActive();
     const { finalPath, outputSize } = await moveOutputToFinal(crawlId, outputDir);
 
-    await publishEvent(crawlId, {
-      type: "log",
-      level: "info",
-      message: "Building ZIP archive for instant download",
-      timestamp: new Date().toISOString(),
-    });
-
-    try {
-      await withTimeout(
-        createPrebuiltArchive(crawlId, finalPath),
-        zipPrebuildTimeoutMs,
-        `ZIP prebuild for crawl ${crawlId}`
-      );
-    } catch (error) {
-      console.error(`[Worker] Failed to prebuild archive: ${crawlId}`, error);
-      await publishEvent(crawlId, {
-        type: "log",
-        level: "warn",
-        message: `ZIP prebuild failed: ${(error as Error).message}. Download will fall back to on-demand ZIP generation.`,
-        timestamp: new Date().toISOString(),
-      });
-    }
-
     await assertCrawlIsActive(true);
 
     await db
@@ -496,6 +474,35 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
       message: `Crawl completed: ${result.succeeded}/${result.total} pages in ${(result.durationMs / 1000).toFixed(1)}s`,
       timestamp: new Date().toISOString(),
     });
+
+    await publishEvent(crawlId, {
+      type: "log",
+      level: "info",
+      message: "Building ZIP archive for instant download",
+      timestamp: new Date().toISOString(),
+    });
+
+    try {
+      await withTimeout(
+        createPrebuiltArchive(crawlId, finalPath),
+        zipPrebuildTimeoutMs,
+        `ZIP prebuild for crawl ${crawlId}`
+      );
+      await publishEvent(crawlId, {
+        type: "log",
+        level: "info",
+        message: "ZIP archive ready for instant download",
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.error(`[Worker] Failed to prebuild archive: ${crawlId}`, error);
+      await publishEvent(crawlId, {
+        type: "log",
+        level: "warn",
+        message: `ZIP prebuild failed: ${(error as Error).message}. Download will fall back to on-demand ZIP generation.`,
+        timestamp: new Date().toISOString(),
+      });
+    }
 
     console.log(
       `[Worker] Crawl completed: ${crawlId} - ${result.succeeded}/${result.total} pages`
@@ -660,9 +667,11 @@ async function reconcileOrphanedCrawls(): Promise<void> {
 
 export function startWorker() {
   const workerConcurrency = parsePositiveIntEnv("WORKER_CRAWL_CONCURRENCY", 2);
-  const lockDuration = parsePositiveIntEnv("WORKER_LOCK_DURATION_MS", 120000);
-  const stalledInterval = parsePositiveIntEnv("WORKER_STALLED_INTERVAL_MS", 60000);
-  const maxStalledCount = parsePositiveIntEnv("WORKER_MAX_STALLED_COUNT", 1);
+  // Long crawl/upload/zip phases can starve lock renewal under heavy CPU pressure.
+  // Use conservative defaults to avoid duplicate retry attempts on healthy long-running jobs.
+  const lockDuration = parsePositiveIntEnv("WORKER_LOCK_DURATION_MS", 900000);
+  const stalledInterval = parsePositiveIntEnv("WORKER_STALLED_INTERVAL_MS", 120000);
+  const maxStalledCount = parsePositiveIntEnv("WORKER_MAX_STALLED_COUNT", 2);
 
   const worker = new Worker<CrawlJobData>("crawl-jobs", processCrawlJob, {
     connection: workerConnection,

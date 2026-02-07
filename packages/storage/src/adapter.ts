@@ -1,3 +1,15 @@
+export interface MoveToFinalProgress {
+  totalBytes: number;
+  uploadedBytes: number;
+  filesTotal: number;
+  filesUploaded: number;
+  currentFile?: string;
+}
+
+export interface MoveToFinalOptions {
+  onProgress?: (progress: MoveToFinalProgress) => void | Promise<void>;
+}
+
 export interface StorageAdapter {
   writeFile(path: string, content: Buffer | string): Promise<void>;
   writeStream(path: string, stream: ReadableStream<Uint8Array>): Promise<void>;
@@ -8,7 +20,7 @@ export interface StorageAdapter {
   getSize(path: string): Promise<number>;
   exists(path: string): Promise<boolean>;
   createTempDir(id: string): Promise<string>;
-  moveToFinal(tempDir: string, id: string): Promise<string>;
+  moveToFinal(tempDir: string, id: string, options?: MoveToFinalOptions): Promise<string>;
   getPublicUrl(path: string): string;
 }
 

@@ -7,6 +7,7 @@ import { db, sites, crawls, crawlLogs, settings } from "./db.js";
 import fs from "node:fs/promises";
 import archiver from "archiver";
 import { Readable } from "node:stream";
+import type { MoveToFinalProgress } from "@dxd/storage/adapter";
 
 const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
 const storage = getStorage();
@@ -199,7 +200,38 @@ async function moveOutputToFinal(crawlId: string, outputDir: string): Promise<{ 
   const tempSize = await getLocalDirectorySize(outputDir);
 
   if (tempSize > 0) {
-    const movedPath = await storage.moveToFinal(outputDir, crawlId);
+    await publishEvent(crawlId, {
+      type: "progress",
+      phase: "uploading",
+      upload: {
+        totalBytes: tempSize,
+        uploadedBytes: 0,
+        filesTotal: 0,
+        filesUploaded: 0,
+        percent: 0,
+      },
+    });
+
+    const movedPath = await storage.moveToFinal(outputDir, crawlId, {
+      onProgress: async (progress: MoveToFinalProgress) => {
+        const totalBytes = progress.totalBytes > 0 ? progress.totalBytes : tempSize;
+        const uploadedBytes = Math.min(progress.uploadedBytes, totalBytes);
+        const percent = totalBytes > 0 ? Math.min(100, (uploadedBytes / totalBytes) * 100) : 100;
+
+        await publishEvent(crawlId, {
+          type: "progress",
+          phase: "uploading",
+          upload: {
+            totalBytes,
+            uploadedBytes,
+            filesTotal: progress.filesTotal,
+            filesUploaded: progress.filesUploaded,
+            currentFile: progress.currentFile,
+            percent,
+          },
+        });
+      },
+    });
     return {
       finalPath: movedPath,
       outputSize: await storage.getSize(movedPath),

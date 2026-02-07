@@ -87,6 +87,7 @@ function CrawlDetailPage() {
     succeeded: crawl.succeededPages || 0,
     failed: crawl.failedPages || 0,
   };
+  const uploadProgress = crawl.status === "uploading" ? progress?.upload : undefined;
 
   const allLogs = dedupeLogs([...(crawl.logs || []).reverse(), ...liveLogs]);
 
@@ -142,7 +143,7 @@ function CrawlDetailPage() {
             )}
             {crawl.status === "uploading" && (
               <span className="px-4 py-2 text-sm text-muted-foreground border border-border rounded-md">
-                Uploading...
+                Uploading{uploadProgress ? ` ${Math.round(uploadProgress.percent)}%` : "..."}
               </span>
             )}
             {crawl.status === "completed" && crawl.outputPath && (
@@ -207,6 +208,43 @@ function CrawlDetailPage() {
               </div>
             </dl>
           </div>
+
+          {crawl.status === "uploading" && uploadProgress && (
+            <div className="bg-card border border-border rounded-lg p-6">
+              <h2 className="text-lg font-semibold mb-4">Upload</h2>
+              <div className="mb-4">
+                <div className="flex justify-between text-sm mb-1">
+                  <span className="text-muted-foreground">Storage</span>
+                  <span>{Math.round(uploadProgress.percent)}%</span>
+                </div>
+                <div className="w-full h-3 bg-muted rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-indigo-500 transition-all duration-300"
+                    style={{ width: `${uploadProgress.percent}%` }}
+                  />
+                </div>
+              </div>
+              <dl className="space-y-3 text-sm">
+                <div className="flex justify-between">
+                  <dt className="text-muted-foreground">Bytes</dt>
+                  <dd className="font-medium">
+                    {formatBytes(uploadProgress.uploadedBytes)} / {formatBytes(uploadProgress.totalBytes)}
+                  </dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-muted-foreground">Files</dt>
+                  <dd className="font-medium">
+                    {uploadProgress.filesUploaded} / {uploadProgress.filesTotal || "?"}
+                  </dd>
+                </div>
+              </dl>
+              {uploadProgress.currentFile && (
+                <p className="text-xs text-muted-foreground mt-3 truncate">
+                  Current: {uploadProgress.currentFile}
+                </p>
+              )}
+            </div>
+          )}
 
           {crawl.errorMessage && (
             <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4">
@@ -359,4 +397,15 @@ function LogLevelBadge({ level }: { level: string }) {
       [{level}]
     </span>
   );
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 B";
+  }
+
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const power = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / 1024 ** power;
+  return `${value.toFixed(power === 0 ? 0 : 1)} ${units[power]}`;
 }

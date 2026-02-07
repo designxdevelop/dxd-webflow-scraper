@@ -13,7 +13,7 @@ import {
   HeadObjectCommand,
   CopyObjectCommand,
 } from "@aws-sdk/client-s3";
-import type { StorageAdapter } from "./adapter.js";
+import type { MoveToFinalOptions, StorageAdapter } from "./adapter.js";
 
 type S3Config = {
   endpoint: string;
@@ -207,21 +207,43 @@ export class S3Storage implements StorageAdapter {
     return tempPath;
   }
 
-  async moveToFinal(tempDir: string, id: string): Promise<string> {
+  async moveToFinal(tempDir: string, id: string, options?: MoveToFinalOptions): Promise<string> {
     const finalPrefix = `archives/${id}`;
     const files = await walkLocalFiles(tempDir);
+    const fileStats = await Promise.all(
+      files.map(async (file) => ({ file, size: (await fsp.stat(file)).size }))
+    );
+    const totalBytes = fileStats.reduce((sum, entry) => sum + entry.size, 0);
+    let uploadedBytes = 0;
+    let filesUploaded = 0;
 
-    for (const file of files) {
+    await options?.onProgress?.({
+      totalBytes,
+      uploadedBytes,
+      filesTotal: fileStats.length,
+      filesUploaded,
+    });
+
+    for (const { file, size } of fileStats) {
       const relative = path.relative(tempDir, file);
       const key = `${finalPrefix}/${relative}`.replace(/\\/g, "/");
-      const body = await fsp.readFile(file);
       await this.client.send(
         new PutObjectCommand({
           Bucket: this.config.bucket,
           Key: key,
-          Body: body,
+          Body: fs.createReadStream(file),
+          ContentLength: size,
         })
       );
+      uploadedBytes += size;
+      filesUploaded += 1;
+      await options?.onProgress?.({
+        totalBytes,
+        uploadedBytes,
+        filesTotal: fileStats.length,
+        filesUploaded,
+        currentFile: relative,
+      });
     }
 
     await fsp.rm(tempDir, { recursive: true, force: true });

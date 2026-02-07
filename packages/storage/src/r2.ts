@@ -1,4 +1,4 @@
-import type { StorageAdapter } from "./adapter.js";
+import type { MoveToFinalOptions, StorageAdapter } from "./adapter.js";
 
 /**
  * R2Storage implements StorageAdapter using native Cloudflare R2 bucket bindings.
@@ -121,7 +121,7 @@ export class R2Storage implements StorageAdapter {
     throw new Error("R2Storage does not support createTempDir. Use S3Storage from the worker.");
   }
 
-  async moveToFinal(_tempDir: string, _id: string): Promise<string> {
+  async moveToFinal(_tempDir: string, _id: string, _options?: MoveToFinalOptions): Promise<string> {
     // R2 has no filesystem — file moves are not applicable.
     // The worker service uses S3Storage for this.
     throw new Error("R2Storage does not support moveToFinal. Use S3Storage from the worker.");

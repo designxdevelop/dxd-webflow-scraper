@@ -13,6 +13,15 @@ export interface CrawlProgressEvent {
   succeeded: number;
   failed: number;
   currentUrl?: string;
+  phase?: "crawl" | "uploading";
+  upload?: {
+    totalBytes: number;
+    uploadedBytes: number;
+    filesTotal: number;
+    filesUploaded: number;
+    currentFile?: string;
+    percent: number;
+  };
 }
 
 export interface UseCrawlLogsResult {
@@ -70,12 +79,23 @@ export function useCrawlLogs(crawlId: string | null): UseCrawlLogsResult {
             },
           ]);
         } else if (data.type === "progress") {
-          setProgress({
-            total: data.total,
-            succeeded: data.succeeded,
-            failed: data.failed,
+          setProgress((prev) => ({
+            total: typeof data.total === "number" ? data.total : (prev?.total ?? 0),
+            succeeded: typeof data.succeeded === "number" ? data.succeeded : (prev?.succeeded ?? 0),
+            failed: typeof data.failed === "number" ? data.failed : (prev?.failed ?? 0),
             currentUrl: data.currentUrl,
-          });
+            phase: data.phase,
+            upload: data.upload
+              ? {
+                  totalBytes: Number(data.upload.totalBytes || 0),
+                  uploadedBytes: Number(data.upload.uploadedBytes || 0),
+                  filesTotal: Number(data.upload.filesTotal || 0),
+                  filesUploaded: Number(data.upload.filesUploaded || 0),
+                  currentFile: data.upload.currentFile,
+                  percent: Number(data.upload.percent || 0),
+                }
+              : undefined,
+          }));
         } else if (data.type === "connected") {
           // Connection confirmed
         } else if (data.type === "ping") {

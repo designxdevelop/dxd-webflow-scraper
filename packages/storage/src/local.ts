@@ -3,7 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import type { StorageAdapter } from "./adapter.js";
+import type { MoveToFinalOptions, StorageAdapter } from "./adapter.js";
 
 export class LocalStorage implements StorageAdapter {
   constructor(private basePath: string) {}
@@ -101,12 +101,20 @@ export class LocalStorage implements StorageAdapter {
     return tempPath;
   }
 
-  async moveToFinal(tempDir: string, id: string): Promise<string> {
+  async moveToFinal(tempDir: string, id: string, options?: MoveToFinalOptions): Promise<string> {
+    const totalBytes = await this.getSize(tempDir);
     const finalPath = path.join(this.basePath, "archives", id);
     await fsp.mkdir(path.dirname(finalPath), { recursive: true });
     // Make finalization idempotent across retries.
     await fsp.rm(finalPath, { recursive: true, force: true });
     await fsp.rename(tempDir, finalPath);
+    await options?.onProgress?.({
+      totalBytes,
+      uploadedBytes: totalBytes,
+      filesTotal: 1,
+      filesUploaded: 1,
+      currentFile: "local-rename",
+    });
     return `archives/${id}`;
   }
 

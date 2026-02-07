@@ -266,24 +266,26 @@ app.get("/:id/download", async (c) => {
   const siteName = crawl.site?.name || "archive";
   const filename = `${siteName}-${crawl.id.slice(0, 8)}.zip`;
 
-  // Try pre-built archive first
-  const archivePath = `${crawl.outputPath}.zip`;
-  try {
-    const archiveExists = await storage.exists(archivePath);
-    if (archiveExists) {
-      return new Response(storage.readStream(archivePath), {
-        headers: {
-          "Content-Type": "application/zip",
-          "Content-Disposition": `attachment; filename="${filename}"`,
-        },
+  const preferPrebuiltZip = process.env.PREFER_PREBUILT_ZIP === "true";
+  if (preferPrebuiltZip) {
+    const archivePath = `${crawl.outputPath}.zip`;
+    try {
+      const archiveExists = await storage.exists(archivePath);
+      if (archiveExists) {
+        return new Response(storage.readStream(archivePath), {
+          headers: {
+            "Content-Type": "application/zip",
+            "Content-Disposition": `attachment; filename="${filename}"`,
+          },
+        });
+      }
+    } catch (error) {
+      console.warn("[download] Failed to read prebuilt archive", {
+        crawlId: id,
+        archivePath,
+        error: (error as Error).message,
       });
     }
-  } catch (error) {
-    console.warn("[download] Failed to read prebuilt archive", {
-      crawlId: id,
-      archivePath,
-      error: (error as Error).message,
-    });
   }
 
   // Fall back to on-demand zip generation using client-zip (Workers-compatible)

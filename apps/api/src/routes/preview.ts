@@ -14,6 +14,7 @@ const encodedPublicPathPattern = new RegExp(
   `(publicPath(?:&quot;|")\\s*:\\s*(?:&quot;|"))(\\/(?!\\/)[^"&<]+)((?:&quot;|"))`,
   "gi"
 );
+const ARCHIVE_ROOT_DIR_PATTERN = /^(?:css|js|images|fonts|media|code-components|assets)\//i;
 
 /**
  * Get file extension from a path using pure string operations (no node:path).
@@ -36,7 +37,82 @@ function rewriteRootRelativeUrl(url: string, previewPrefix: string): string {
   return `${previewPrefix}${url}`;
 }
 
-function rewriteCssForPreview(css: string, crawlId: string): string {
+function splitPathSuffix(value: string): { path: string; suffix: string } {
+  const questionMarkIndex = value.indexOf("?");
+  const hashIndex = value.indexOf("#");
+  const indexes = [questionMarkIndex, hashIndex].filter((i) => i >= 0);
+  if (indexes.length === 0) {
+    return { path: value, suffix: "" };
+  }
+  const splitAt = Math.min(...indexes);
+  return {
+    path: value.slice(0, splitAt),
+    suffix: value.slice(splitAt),
+  };
+}
+
+function normalizePath(pathname: string): string {
+  const parts = pathname.split("/");
+  const stack: string[] = [];
+  for (const part of parts) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      if (stack.length > 0) stack.pop();
+      continue;
+    }
+    stack.push(part);
+  }
+  return stack.join("/");
+}
+
+function getBaseDir(filePath: string): string {
+  const trimmed = filePath.replace(/^\/+/, "");
+  if (!trimmed) return ".";
+  if (trimmed.endsWith("/")) return normalizePath(trimmed);
+  const lastSlash = trimmed.lastIndexOf("/");
+  if (lastSlash < 0) {
+    return trimmed.includes(".") ? "." : normalizePath(trimmed);
+  }
+  return normalizePath(trimmed.slice(0, lastSlash));
+}
+
+function isLikelyAbsoluteUrl(value: string): boolean {
+  return /^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(value);
+}
+
+function rewriteArchiveRelativeUrl(value: string, filePath: string, previewPrefix: string): string {
+  if (!value) return value;
+  const trimmed = value.trim();
+  if (
+    !trimmed ||
+    trimmed.startsWith("#") ||
+    trimmed.startsWith("data:") ||
+    trimmed.startsWith("javascript:") ||
+    trimmed.startsWith("mailto:") ||
+    trimmed.startsWith("tel:") ||
+    isLikelyAbsoluteUrl(trimmed)
+  ) {
+    return value;
+  }
+
+  const { path, suffix } = splitPathSuffix(trimmed);
+  if (!path) return value;
+
+  if (path.startsWith("/")) {
+    return `${rewriteRootRelativeUrl(path, previewPrefix)}${suffix}`;
+  }
+
+  const baseDir = getBaseDir(filePath);
+  const combined = baseDir === "." ? path : `${baseDir}/${path}`;
+  const normalized = normalizePath(combined);
+  if (!ARCHIVE_ROOT_DIR_PATTERN.test(normalized)) {
+    return value;
+  }
+
+  return `${previewPrefix}/${normalized}${suffix}`;
+}
+
+function rewriteCssForPreview(css: string, crawlId: string, filePath: string): string {
   const previewPrefix = `/preview/${crawlId}`;
 
   return css
@@ -44,8 +120,16 @@ function rewriteCssForPreview(css: string, crawlId: string): string {
       const rewritten = rewriteRootRelativeUrl(url, previewPrefix);
       return `url(${quote}${rewritten}${quote})`;
     })
+    .replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/gi, (_match, quote: string, url: string) => {
+      const rewritten = rewriteArchiveRelativeUrl(url, filePath, previewPrefix);
+      return `url(${quote}${rewritten}${quote})`;
+    })
     .replace(/(@import\s+)(['"])(\/(?!\/)[^'"]+)\2/gi, (_match, prefix: string, quote: string, url: string) => {
       const rewritten = rewriteRootRelativeUrl(url, previewPrefix);
+      return `${prefix}${quote}${rewritten}${quote}`;
+    })
+    .replace(/(@import\s+)(['"])([^'"]+)\2/gi, (_match, prefix: string, quote: string, url: string) => {
+      const rewritten = rewriteArchiveRelativeUrl(url, filePath, previewPrefix);
       return `${prefix}${quote}${rewritten}${quote}`;
     })
     .replace(
@@ -54,30 +138,37 @@ function rewriteCssForPreview(css: string, crawlId: string): string {
         const rewritten = rewriteRootRelativeUrl(url, previewPrefix);
         return `${start}${quote}${rewritten}${quote}${end}`;
       }
+    )
+    .replace(
+      /(@import\s+url\(\s*)(['"]?)([^'")]+)\2(\s*\))/gi,
+      (_match, start: string, quote: string, url: string, end: string) => {
+        const rewritten = rewriteArchiveRelativeUrl(url, filePath, previewPrefix);
+        return `${start}${quote}${rewritten}${quote}${end}`;
+      }
     );
 }
 
-function rewriteSrcsetValue(srcset: string, previewPrefix: string): string {
+function rewriteSrcsetValue(srcset: string, previewPrefix: string, filePath: string): string {
   return srcset
     .split(",")
     .map((candidate) => {
       const trimmed = candidate.trim();
       if (!trimmed) return trimmed;
       const [url, ...rest] = trimmed.split(/\s+/);
-      const rewritten = rewriteRootRelativeUrl(url, previewPrefix);
+      const rewritten = rewriteArchiveRelativeUrl(url, filePath, previewPrefix);
       return [rewritten, ...rest].join(" ");
     })
     .join(", ");
 }
 
-function rewriteHtmlForPreview(html: string, crawlId: string): string {
+function rewriteHtmlForPreview(html: string, crawlId: string, filePath: string): string {
   const previewPrefix = `/preview/${crawlId}`;
 
   const rewritten = html
     .replace(
       /(\s(?:href|src|action|poster|content)\s*=\s*)(["'])([^"']+)\2/gi,
       (_match, prefix: string, quote: string, value: string) => {
-        const rewritten = rewriteRootRelativeUrl(value, previewPrefix);
+        const rewritten = rewriteArchiveRelativeUrl(value, filePath, previewPrefix);
         return `${prefix}${quote}${rewritten}${quote}`;
       }
     )
@@ -86,14 +177,14 @@ function rewriteHtmlForPreview(html: string, crawlId: string): string {
       return `${prefix}${rewritten}`;
     })
     .replace(/(\ssrcset\s*=\s*)(["'])([^"']+)\2/gi, (_match, prefix: string, quote: string, value: string) => {
-      const rewritten = rewriteSrcsetValue(value, previewPrefix);
+      const rewritten = rewriteSrcsetValue(value, previewPrefix, filePath);
       return `${prefix}${quote}${rewritten}${quote}`;
     })
     .replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style>)/gi, (_match, start: string, css: string, end: string) => {
-      return `${start}${rewriteCssForPreview(css, crawlId)}${end}`;
+      return `${start}${rewriteCssForPreview(css, crawlId, filePath)}${end}`;
     })
     .replace(/(\sstyle\s*=\s*)(["'])([\s\S]*?)\2/gi, (_match, prefix: string, quote: string, styleValue: string) => {
-      return `${prefix}${quote}${rewriteCssForPreview(styleValue, crawlId)}${quote}`;
+      return `${prefix}${quote}${rewriteCssForPreview(styleValue, crawlId, filePath)}${quote}`;
     })
     .replace(encodedClientModuleUrlPattern, (_match, prefix: string, value: string, suffix: string) => {
       const rewritten = rewriteRootRelativeUrl(value, `/preview/${crawlId}`);
@@ -214,7 +305,8 @@ app.get("/:crawlId/*", async (c) => {
       const indexExists = await storage.exists(indexPath);
       if (indexExists) {
         const content = await storage.readFile(indexPath);
-        const html = rewriteHtmlForPreview(content.toString("utf-8"), crawlId);
+        const servedPath = `${filePath.replace(/\/+$/, "")}/index.html`.replace(/^\/+/, "");
+        const html = rewriteHtmlForPreview(content.toString("utf-8"), crawlId, servedPath);
         return new Response(html, {
           headers: {
             ...previewResponseHeaders,
@@ -230,14 +322,14 @@ app.get("/:crawlId/*", async (c) => {
     const contentType = getContentType(filePath);
 
     if (contentType.includes("text/html")) {
-      const html = rewriteHtmlForPreview(content.toString("utf-8"), crawlId);
+      const html = rewriteHtmlForPreview(content.toString("utf-8"), crawlId, filePath);
       return new Response(html, {
         headers: { ...previewResponseHeaders, "Content-Type": contentType, "Cache-Control": "no-store" },
       });
     }
 
     if (contentType.includes("text/css")) {
-      const css = rewriteCssForPreview(content.toString("utf-8"), crawlId);
+      const css = rewriteCssForPreview(content.toString("utf-8"), crawlId, filePath);
       return new Response(css, {
         headers: {
           ...previewResponseHeaders,

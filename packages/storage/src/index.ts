@@ -82,14 +82,20 @@ type S3Env = {
 };
 
 function getS3Env(): S3Env {
+  const r2Endpoint = process.env.R2_ENDPOINT;
+  const r2ForcePathStyleRaw = process.env.R2_FORCE_PATH_STYLE;
+  const r2ForcePathStyle =
+    r2ForcePathStyleRaw === "true" ||
+    (r2ForcePathStyleRaw !== "false" && Boolean(r2Endpoint?.includes(".r2.cloudflarestorage.com")));
+
   const r2Env: S3Env = {
-    endpoint: process.env.R2_ENDPOINT,
+    endpoint: r2Endpoint,
     accessKeyId: process.env.R2_ACCESS_KEY_ID,
     secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
     bucket: process.env.R2_BUCKET,
     region: process.env.R2_REGION || "auto",
     publicUrl: process.env.R2_PUBLIC_URL,
-    forcePathStyle: process.env.R2_FORCE_PATH_STYLE === "true",
+    forcePathStyle: r2ForcePathStyle,
   };
 
   const s3Env: S3Env = {

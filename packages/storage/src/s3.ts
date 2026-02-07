@@ -258,11 +258,11 @@ export class S3Storage implements StorageAdapter {
         })
       );
     } catch (error) {
-      if (!isChecksumMismatchError(error)) {
+      if (!isChecksumMismatchError(error) && !isSignatureMismatchError(error)) {
         throw error;
       }
 
-      // Fallback: upload from an in-memory buffer to avoid stream checksum mismatch edge cases.
+      // Fallback: upload from an in-memory buffer to avoid stream signing/checksum edge cases.
       const buffer = await fsp.readFile(localFilePath);
       await this.client.send(
         new PutObjectCommand({
@@ -328,4 +328,15 @@ function isChecksumMismatchError(error: unknown): boolean {
     return false;
   }
   return /crc32 checksum/i.test(error.message);
+}
+
+function isSignatureMismatchError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const maybeError = error as { name?: string; Code?: string; message?: string };
+  const code = maybeError.Code || maybeError.name || "";
+  const message = maybeError.message || "";
+  return code === "SignatureDoesNotMatch" || /signature.*does not match/i.test(message);
 }

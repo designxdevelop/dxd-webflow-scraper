@@ -202,14 +202,21 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
       };
     }
 
-    // Cross-crawl asset cache scoped by hostname for isolation
-    const cacheDir = options.assetCacheDir ?? path.join(
-      process.env.LOCAL_TEMP_PATH || "/tmp",
-      "dxd-asset-cache",
-      new URL(options.baseUrl).hostname,
-    );
-    const assetCache = new AssetCache(cacheDir);
-    await assetCache.init();
+    const assetCacheEnabled = process.env.ASSET_CACHE_ENABLED === "true";
+    let assetCache: AssetCache | undefined;
+    if (assetCacheEnabled) {
+      // Cross-crawl asset cache scoped by hostname for isolation
+      const cacheDir = options.assetCacheDir ?? path.join(
+        process.env.LOCAL_TEMP_PATH || "/tmp",
+        "dxd-asset-cache",
+        new URL(options.baseUrl).hostname,
+      );
+      assetCache = new AssetCache(cacheDir);
+      await assetCache.init();
+      log.info(`Asset cache enabled at ${cacheDir}`);
+    } else {
+      log.info("Asset cache disabled (set ASSET_CACHE_ENABLED=true to enable)");
+    }
 
     const assetDownloader = new AssetDownloader(resolvedOutput, assetCache, {
       downloadBlacklist: options.downloadBlacklist,
@@ -506,12 +513,16 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
     await writeOutputConfig(resolvedOutput, options.redirectsCsv);
     await reportProgress();
 
-    // Evict stale entries from the cross-crawl asset cache
-    await assetCache.evict();
-    const cacheStats = assetCache.getStats();
-    log.info(
-      `Asset cache: ${cacheStats.hits} hits, ${cacheStats.misses} misses (${cacheStats.hitRate} hit rate)`,
-    );
+    let cacheHitRate = "n/a";
+    if (assetCache) {
+      // Evict stale entries from the cross-crawl asset cache
+      await assetCache.evict();
+      const cacheStats = assetCache.getStats();
+      cacheHitRate = cacheStats.hitRate;
+      log.info(
+        `Asset cache: ${cacheStats.hits} hits, ${cacheStats.misses} misses (${cacheStats.hitRate} hit rate)`,
+      );
+    }
 
     if (staticPageCount > 0) {
       log.info(
@@ -525,7 +536,7 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
       failed: failedCount,
       durationMs: Date.now() - startedAt,
       staticPages: staticPageCount,
-      cacheHitRate: cacheStats.hitRate,
+      cacheHitRate,
     };
   });
 }

@@ -197,7 +197,7 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
   const maxDurationMs = parsePositiveIntEnv("CRAWL_MAX_DURATION_MS", 45 * 60 * 1000);
   const progressPersistIntervalMs = parsePositiveIntEnv("CRAWL_PROGRESS_PERSIST_INTERVAL_MS", 1500);
   const statusCheckIntervalMs = parsePositiveIntEnv("CRAWL_STATUS_CHECK_INTERVAL_MS", 3000);
-  const maxSiteConcurrency = parsePositiveIntEnv("MAX_SITE_CONCURRENCY", 8);
+  const maxSiteConcurrency = parsePositiveIntEnv("MAX_SITE_CONCURRENCY", 30);
   const zipPrebuildTimeoutMs = parsePositiveIntEnv("ZIP_PREBUILD_TIMEOUT_MS", 120000);
   const crawlConcurrency = Math.max(1, Math.min(site.concurrency ?? 5, maxSiteConcurrency));
   const globalDownloadBlacklist = await readGlobalDownloadBlacklist();

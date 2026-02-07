@@ -45,7 +45,7 @@ function NewSitePage() {
   const [formData, setFormData] = useState<CreateSiteInput>({
     name: "",
     url: "",
-    concurrency: 5,
+    concurrency: 30,
     maxPages: null,
     removeWebflowBadge: true,
     scheduleEnabled: false,

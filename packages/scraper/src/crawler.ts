@@ -189,33 +189,79 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
 
     const freeMemoryGB = os.freemem() / 1024 ** 3;
     const cpuCount = os.cpus().length;
-    const configuredMaxConcurrency = readPositiveInt("MAX_CRAWL_CONCURRENCY", 10);
+    const configuredMaxConcurrency = readPositiveInt("MAX_CRAWL_CONCURRENCY", 30);
     const requestedConcurrency = Math.max(1, options.concurrency);
-    const maxConcurrencyByMemory = Math.max(1, Math.floor(Math.max(0.5, freeMemoryGB - 1.5) / 0.25));
-    const effectiveConcurrency = Math.max(
-      1,
-      Math.min(requestedConcurrency, configuredMaxConcurrency, cpuCount * 2, maxConcurrencyByMemory)
-    );
 
-    if (effectiveConcurrency < requestedConcurrency) {
-      log.warn(
-        `Crawl concurrency reduced from ${requestedConcurrency} to ${effectiveConcurrency} for stability`
+    // Resource calculation parameters (overrideable via env)
+    const memoryBufferGB = readPositiveInt("CRAWL_MEMORY_BUFFER_GB", 15) / 10; // Default 1.5GB
+    const memoryMBPerPage = readPositiveInt("CRAWL_MEMORY_MB_PER_PAGE", 250);
+    const memoryMBPerBrowser = readPositiveInt("CRAWL_MEMORY_MB_PER_BROWSER", 350);
+
+    // Dynamic boost: override concurrency and browsers via env
+    const overrideConcurrency = readPositiveInt("CRAWL_OVERRIDE_CONCURRENCY", 0);
+    const overrideBrowsers = readPositiveInt("CRAWL_OVERRIDE_BROWSERS", 0);
+    const disableResourceChecks = process.env.CRAWL_DISABLE_RESOURCE_CHECKS === "true";
+
+    let effectiveConcurrency: number;
+    let numBrowsers: number;
+
+    if (overrideConcurrency > 0 && overrideBrowsers > 0) {
+      // Fully manual override - bypass all resource checks
+      effectiveConcurrency = overrideConcurrency;
+      numBrowsers = overrideBrowsers;
+      log.info(
+        `CRAWL_OVERRIDE_CONCURRENCY=${overrideConcurrency}, CRAWL_OVERRIDE_BROWSERS=${overrideBrowsers} - bypassing resource checks`
       );
+    } else {
+      // Calculate based on resources
+      const memoryGBPerPage = memoryMBPerPage / 1024;
+      const memoryGBPerBrowser = memoryMBPerBrowser / 1024;
+      const maxConcurrencyByMemory = Math.max(
+        1,
+        Math.floor(Math.max(0.5, freeMemoryGB - memoryBufferGB) / memoryGBPerPage)
+      );
+
+      effectiveConcurrency = disableResourceChecks
+        ? Math.min(requestedConcurrency, configuredMaxConcurrency)
+        : Math.max(
+            1,
+            Math.min(
+              requestedConcurrency,
+              configuredMaxConcurrency,
+              cpuCount * 2,
+              maxConcurrencyByMemory
+            )
+          );
+
+      if (effectiveConcurrency < requestedConcurrency && !disableResourceChecks) {
+        log.warn(
+          `Crawl concurrency reduced from ${requestedConcurrency} to ${effectiveConcurrency} for stability`
+        );
+      }
+
+      const maxBrowsersByMemory = Math.max(
+        1,
+        Math.floor(Math.max(0.5, freeMemoryGB - memoryBufferGB) / memoryGBPerBrowser)
+      );
+      const maxBrowsersByCPU = Math.max(1, Math.floor(cpuCount));
+      const desiredBrowsers =
+        effectiveConcurrency >= 4 ? Math.max(2, Math.ceil(effectiveConcurrency / 3)) : 1;
+
+      if (overrideBrowsers > 0) {
+        numBrowsers = overrideBrowsers;
+      } else {
+        numBrowsers = disableResourceChecks
+          ? desiredBrowsers
+          : Math.max(1, Math.min(desiredBrowsers, maxBrowsersByCPU, maxBrowsersByMemory));
+      }
     }
 
-    const maxBrowsersByMemory = Math.max(1, Math.floor(Math.max(0.5, freeMemoryGB - 1.5) / 0.35));
-    const maxBrowsersByCPU = Math.max(1, Math.floor(cpuCount));
-    const desiredBrowsers =
-      effectiveConcurrency >= 4 ? Math.max(2, Math.ceil(effectiveConcurrency / 3)) : 1;
-    const numBrowsers = Math.max(
-      1,
-      Math.min(desiredBrowsers, maxBrowsersByCPU, maxBrowsersByMemory)
-    );
     const concurrencyPerBrowser = Math.max(1, Math.ceil(effectiveConcurrency / numBrowsers));
 
     log.info(
-      `System capacity: ${cpuCount} CPUs, ${freeMemoryGB.toFixed(1)}GB free memory. ` +
-        `Launching ${numBrowsers} browser instance(s) with ${concurrencyPerBrowser} concurrent pages each`
+      `System: ${cpuCount} CPUs, ${freeMemoryGB.toFixed(1)}GB free. ` +
+        `Launching ${numBrowsers} browser(s) with ${concurrencyPerBrowser} pages each ` +
+        `(${effectiveConcurrency} total concurrency)`
     );
 
     const browsers: Browser[] = [];

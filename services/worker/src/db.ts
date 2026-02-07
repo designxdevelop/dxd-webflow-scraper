@@ -18,7 +18,7 @@ export const sites = pgTable("sites", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: varchar("name", { length: 255 }).notNull(),
   url: varchar("url", { length: 500 }).notNull(),
-  concurrency: integer("concurrency").default(5),
+  concurrency: integer("concurrency").default(30),
   maxPages: integer("max_pages"),
   excludePatterns: text("exclude_patterns").array(),
   downloadBlacklist: text("download_blacklist").array(),

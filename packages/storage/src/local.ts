@@ -104,6 +104,8 @@ export class LocalStorage implements StorageAdapter {
   async moveToFinal(tempDir: string, id: string): Promise<string> {
     const finalPath = path.join(this.basePath, "archives", id);
     await fsp.mkdir(path.dirname(finalPath), { recursive: true });
+    // Make finalization idempotent across retries.
+    await fsp.rm(finalPath, { recursive: true, force: true });
     await fsp.rename(tempDir, finalPath);
     return `archives/${id}`;
   }

@@ -155,6 +155,27 @@ async function publishEvent(crawlId: string, event: object) {
   );
 }
 
+async function moveOutputToFinal(crawlId: string, outputDir: string): Promise<{ finalPath: string; outputSize: number }> {
+  const finalPath = `archives/${crawlId}`;
+  const tempSize = await storage.getSize(outputDir);
+
+  if (tempSize > 0) {
+    const movedPath = await storage.moveToFinal(outputDir, crawlId);
+    return {
+      finalPath: movedPath,
+      outputSize: await storage.getSize(movedPath),
+    };
+  }
+
+  // If temp output is gone, a previous attempt may have already moved it.
+  const existingFinalSize = await storage.getSize(finalPath);
+  if (existingFinalSize > 0) {
+    return { finalPath, outputSize: existingFinalSize };
+  }
+
+  throw new Error(`No crawl output found in temp (${outputDir}) or final (${finalPath})`);
+}
+
 async function processCrawlJob(job: Job<CrawlJobData>) {
   const { siteId, crawlId } = job.data;
 
@@ -219,6 +240,7 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
   let lastProgressPersistAt = 0;
   let lastStatusCheckAt = 0;
   let cancelled = false;
+  let crawlPhaseComplete = false;
 
   const timeoutController = new AbortController();
   const timeoutId = setTimeout(() => {
@@ -226,7 +248,7 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
   }, maxDurationMs);
 
   const assertCrawlIsActive = async (force = false): Promise<void> => {
-    if (timeoutController.signal.aborted) {
+    if (!crawlPhaseComplete && timeoutController.signal.aborted) {
       throw new CrawlTimeoutError(
         `Crawl exceeded max duration of ${Math.round(maxDurationMs / 60000)} minutes`
       );
@@ -338,6 +360,8 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
         });
       },
     });
+    crawlPhaseComplete = true;
+    clearTimeout(timeoutId);
 
     await assertCrawlIsActive(true);
 
@@ -354,10 +378,7 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
     });
 
     await assertCrawlIsActive();
-    const finalPath = await storage.moveToFinal(outputDir, crawlId);
-
-    await assertCrawlIsActive();
-    const outputSize = await storage.getSize(finalPath);
+    const { finalPath, outputSize } = await moveOutputToFinal(crawlId, outputDir);
 
     await publishEvent(crawlId, {
       type: "log",
@@ -432,8 +453,7 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
           timestamp: new Date().toISOString(),
         });
 
-        const finalPath = await storage.moveToFinal(outputDir, crawlId);
-        const outputSize = await storage.getSize(finalPath);
+        const { finalPath, outputSize } = await moveOutputToFinal(crawlId, outputDir);
 
         // Try to build ZIP for partial results too
         try {

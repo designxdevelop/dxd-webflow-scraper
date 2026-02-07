@@ -295,14 +295,18 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
         `(${effectiveConcurrency} total concurrency)`
     );
 
+    const scopedPages = new Set(allPages);
+    const resumedSucceeded = state.succeeded.filter((url) => scopedPages.has(url));
+    const resumedFailed = state.failed.filter((url) => scopedPages.has(url) && !resumedSucceeded.includes(url));
+
     const browsers: Browser[] = [];
     const contexts: BrowserContext[] = [];
     const browserRecoveries: Array<Promise<void> | null> = [];
     const pendingSucceeded: string[] = [];
     const pendingFailed: string[] = [];
     let processed = 0;
-    let succeededCount = state.succeeded.length;
-    let failedCount = state.failed.length;
+    let succeededCount = resumedSucceeded.length;
+    let failedCount = resumedFailed.length;
 
     // B2: Shared work queue — all browsers pull from a single pool
     const visitedUrls = new Set<string>([...state.succeeded, ...state.failed]);

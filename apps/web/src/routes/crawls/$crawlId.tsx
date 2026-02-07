@@ -98,40 +98,45 @@ function CrawlDetailPage() {
   const allLogs = dedupeLogs([...(crawl.logs || []).reverse(), ...liveLogs]);
 
   return (
-    <div className="p-8">
+    <div className="p-8 max-w-7xl mx-auto">
       <div className="mb-8">
         <Link
           to="/crawls"
-          className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground mb-4"
+          className="btn-ghost btn-sm mb-4"
         >
-          <ArrowLeft size={16} />
+          <ArrowLeft size={14} />
           Back to Crawls
         </Link>
 
         <div className="flex items-start justify-between">
           <div>
+            <div className="flex items-center gap-3 mb-1">
+              <span className="text-xs font-mono" style={{ color: "#6366f1" }}>
+                crawls/{crawl.id.slice(0, 8)}
+              </span>
+            </div>
             <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-bold text-foreground">
+              <h1 className="text-2xl font-bold" style={{ color: "#fafafa" }}>
                 {crawl.site?.name || "Unknown Site"}
               </h1>
               <StatusBadge status={crawl.status || "unknown"} />
               {isActive && (
-                <span className="flex items-center gap-1 text-sm text-muted-foreground">
+                <span className="flex items-center gap-1.5 text-xs font-mono">
                   {connected ? (
                     <>
-                      <Wifi size={14} className="text-green-500" />
-                      Live
+                      <Wifi size={14} style={{ color: "#22c55e" }} />
+                      <span style={{ color: "#22c55e" }}>Live</span>
                     </>
                   ) : (
                     <>
-                      <WifiOff size={14} className="text-yellow-500" />
-                      Connecting...
+                      <WifiOff size={14} style={{ color: "#f59e0b" }} />
+                      <span style={{ color: "#f59e0b" }}>Connecting...</span>
                     </>
                   )}
                 </span>
               )}
             </div>
-            <p className="text-muted-foreground mt-1">
+            <p className="text-sm font-mono mt-1" style={{ color: "#71717a" }}>
               Started {crawl.startedAt ? new Date(crawl.startedAt).toLocaleString() : "pending"}
             </p>
           </div>
@@ -141,14 +146,14 @@ function CrawlDetailPage() {
               <button
                 onClick={() => cancelMutation.mutate()}
                 disabled={cancelMutation.isPending}
-                className="flex items-center gap-2 px-4 py-2 border border-destructive text-destructive rounded-md hover:bg-destructive/10"
+                className="btn-danger disabled:opacity-50"
               >
-                <XCircle size={18} />
+                <XCircle size={16} />
                 Cancel
               </button>
             )}
             {crawl.status === "uploading" && (
-              <span className="px-4 py-2 text-sm text-muted-foreground border border-border rounded-md">
+              <span className="btn-secondary" style={{ cursor: "default", opacity: 0.8 }}>
                 Uploading{uploadProgress ? ` ${Math.round(uploadProgress.percent)}%` : "..."}
               </span>
             )}
@@ -158,16 +163,16 @@ function CrawlDetailPage() {
                   href={crawlsApi.getPreviewUrl(crawl.id)}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-2 px-4 py-2 border border-border rounded-md hover:bg-muted"
+                  className="btn-secondary"
                 >
-                  <ExternalLink size={18} />
+                  <ExternalLink size={16} />
                   Preview
                 </a>
                 <a
                   href={crawlsApi.getDownloadUrl(crawl.id)}
-                  className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
+                  className="btn-primary"
                 >
-                  <Download size={18} />
+                  <Download size={16} />
                   Download
                 </a>
               </>
@@ -176,22 +181,22 @@ function CrawlDetailPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
         {/* Stats */}
         <div className="lg:col-span-1 space-y-4">
-          <div className="bg-card border border-border rounded-lg p-6">
-            <h2 className="text-lg font-semibold mb-4">Progress</h2>
+          <div className="card-dark p-6">
+            <h2 className="text-sm font-semibold mb-4" style={{ color: "#fafafa" }}>Progress</h2>
 
             <div className="mb-4">
-              <div className="flex justify-between text-sm mb-1">
-                <span className="text-muted-foreground">Pages</span>
-                <span>
+              <div className="flex justify-between text-xs font-mono mb-1.5">
+                <span style={{ color: "#71717a" }}>Pages</span>
+                <span style={{ color: "#a1a1aa" }}>
                   {displayProgress.succeeded} / {displayProgress.total || "?"}
                 </span>
               </div>
-              <div className="w-full h-3 bg-muted rounded-full overflow-hidden">
+              <div className="progress-dark" style={{ height: "8px" }}>
                 <div
-                  className="h-full bg-primary transition-all duration-300"
+                  className="progress-dark-fill"
                   style={{
                     width: `${displayProgress.total ? (displayProgress.succeeded / displayProgress.total) * 100 : 0}%`,
                   }}
@@ -201,51 +206,51 @@ function CrawlDetailPage() {
 
             <dl className="space-y-3 text-sm">
               <div className="flex justify-between">
-                <dt className="text-muted-foreground">Succeeded</dt>
-                <dd className="text-green-600 font-medium">{displayProgress.succeeded}</dd>
+                <dt className="text-xs" style={{ color: "#71717a" }}>Succeeded</dt>
+                <dd className="font-mono font-medium" style={{ color: "#4ade80" }}>{displayProgress.succeeded}</dd>
               </div>
               <div className="flex justify-between">
-                <dt className="text-muted-foreground">Failed</dt>
-                <dd className="text-red-600 font-medium">{displayProgress.failed}</dd>
+                <dt className="text-xs" style={{ color: "#71717a" }}>Failed</dt>
+                <dd className="font-mono font-medium" style={{ color: "#f87171" }}>{displayProgress.failed}</dd>
               </div>
               <div className="flex justify-between">
-                <dt className="text-muted-foreground">Total</dt>
-                <dd className="font-medium">{displayProgress.total || "?"}</dd>
+                <dt className="text-xs" style={{ color: "#71717a" }}>Total</dt>
+                <dd className="font-mono font-medium" style={{ color: "#fafafa" }}>{displayProgress.total || "?"}</dd>
               </div>
             </dl>
           </div>
 
           {crawl.status === "uploading" && uploadProgress && (
-            <div className="bg-card border border-border rounded-lg p-6">
-              <h2 className="text-lg font-semibold mb-4">Upload</h2>
+            <div className="card-dark p-6">
+              <h2 className="text-sm font-semibold mb-4" style={{ color: "#fafafa" }}>Upload</h2>
               <div className="mb-4">
-                <div className="flex justify-between text-sm mb-1">
-                  <span className="text-muted-foreground">Storage</span>
-                  <span>{Math.round(uploadProgress.percent)}%</span>
+                <div className="flex justify-between text-xs font-mono mb-1.5">
+                  <span style={{ color: "#71717a" }}>Storage</span>
+                  <span style={{ color: "#a1a1aa" }}>{Math.round(uploadProgress.percent)}%</span>
                 </div>
-                <div className="w-full h-3 bg-muted rounded-full overflow-hidden">
+                <div className="progress-dark" style={{ height: "8px" }}>
                   <div
-                    className="h-full bg-indigo-500 transition-all duration-300"
+                    className="progress-dark-fill"
                     style={{ width: `${uploadProgress.percent}%` }}
                   />
                 </div>
               </div>
               <dl className="space-y-3 text-sm">
                 <div className="flex justify-between">
-                  <dt className="text-muted-foreground">Bytes</dt>
-                  <dd className="font-medium">
+                  <dt className="text-xs" style={{ color: "#71717a" }}>Bytes</dt>
+                  <dd className="font-mono font-medium" style={{ color: "#a1a1aa" }}>
                     {formatBytes(uploadProgress.uploadedBytes)} / {formatBytes(uploadProgress.totalBytes)}
                   </dd>
                 </div>
                 <div className="flex justify-between">
-                  <dt className="text-muted-foreground">Files</dt>
-                  <dd className="font-medium">
+                  <dt className="text-xs" style={{ color: "#71717a" }}>Files</dt>
+                  <dd className="font-mono font-medium" style={{ color: "#a1a1aa" }}>
                     {uploadProgress.filesUploaded} / {uploadProgress.filesTotal || "?"}
                   </dd>
                 </div>
               </dl>
               {uploadProgress.currentFile && (
-                <p className="text-xs text-muted-foreground mt-3 truncate">
+                <p className="text-xs font-mono mt-3 truncate" style={{ color: "#52525b" }}>
                   Current: {uploadProgress.currentFile}
                 </p>
               )}
@@ -253,23 +258,26 @@ function CrawlDetailPage() {
           )}
 
           {crawl.errorMessage && (
-            <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4">
-              <h3 className="text-sm font-medium text-destructive mb-2">Error</h3>
-              <p className="text-sm text-destructive/80">{crawl.errorMessage}</p>
+            <div
+              className="rounded-lg p-4"
+              style={{ backgroundColor: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.2)" }}
+            >
+              <h3 className="text-xs font-semibold mb-2" style={{ color: "#f87171" }}>Error</h3>
+              <p className="text-sm" style={{ color: "#fca5a5" }}>{crawl.errorMessage}</p>
             </div>
           )}
 
           {progress?.currentUrl && (
-            <div className="bg-card border border-border rounded-lg p-4">
-              <h3 className="text-sm font-medium mb-2">Current URL</h3>
-              <p className="text-sm text-muted-foreground truncate">{progress.currentUrl}</p>
+            <div className="card-dark p-4">
+              <h3 className="text-xs font-semibold mb-2" style={{ color: "#a1a1aa" }}>Current URL</h3>
+              <p className="text-xs font-mono truncate" style={{ color: "#71717a" }}>{progress.currentUrl}</p>
             </div>
           )}
 
           {suggestionQuery.data?.suggestions && suggestionQuery.data.suggestions.length > 0 && (
-            <div className="bg-card border border-border rounded-lg p-4 space-y-3">
+            <div className="card-dark p-4 space-y-3">
               <div className="flex items-center justify-between gap-2">
-                <h3 className="text-sm font-medium">Download Blacklist Suggestions</h3>
+                <h3 className="text-xs font-semibold" style={{ color: "#fafafa" }}>Blacklist Suggestions</h3>
                 <button
                   type="button"
                   disabled={applySuggestionsMutation.isPending}
@@ -281,32 +289,36 @@ function CrawlDetailPage() {
                       applySuggestionsMutation.mutate(urls);
                     }
                   }}
-                  className="text-xs px-2 py-1 border border-border rounded-md hover:bg-muted disabled:opacity-50"
+                  className="btn-ghost btn-sm disabled:opacity-50"
                 >
                   Blacklist All
                 </button>
               </div>
 
-              <p className="text-xs text-muted-foreground">
+              <p className="text-xs" style={{ color: "#71717a" }}>
                 Repeated failed downloads were detected. Add them to this site&apos;s blacklist so
                 future crawls skip them.
               </p>
 
               <div className="space-y-2">
                 {suggestionQuery.data.suggestions.map((suggestion) => (
-                  <div key={suggestion.url} className="border border-border rounded-md p-2">
-                    <div className="text-xs text-muted-foreground mb-1">
+                  <div
+                    key={suggestion.url}
+                    className="rounded-lg p-3"
+                    style={{ backgroundColor: "#09090b", border: "1px solid #27272a" }}
+                  >
+                    <div className="text-xs font-mono mb-1" style={{ color: "#71717a" }}>
                       {suggestion.count} failed attempts
                     </div>
-                    <p className="text-xs break-all mb-2">{suggestion.url}</p>
+                    <p className="text-xs font-mono break-all mb-2" style={{ color: "#a1a1aa" }}>{suggestion.url}</p>
                     {suggestion.alreadyBlacklisted ? (
-                      <span className="text-xs text-green-700">Already blacklisted</span>
+                      <span className="text-xs font-mono" style={{ color: "#4ade80" }}>Already blacklisted</span>
                     ) : (
                       <button
                         type="button"
                         disabled={applySuggestionsMutation.isPending}
                         onClick={() => applySuggestionsMutation.mutate([suggestion.url])}
-                        className="text-xs inline-flex items-center gap-1 px-2 py-1 border border-border rounded-md hover:bg-muted disabled:opacity-50"
+                        className="btn-ghost btn-sm disabled:opacity-50"
                       >
                         <Ban size={12} />
                         Blacklist URL
@@ -321,24 +333,24 @@ function CrawlDetailPage() {
 
         {/* Logs */}
         <div className="lg:col-span-3">
-          <div className="bg-card border border-border rounded-lg">
-            <div className="px-6 py-4 border-b border-border">
-              <h2 className="text-lg font-semibold">Logs</h2>
+          <div className="card-dark overflow-hidden">
+            <div className="px-6 py-4" style={{ borderBottom: "1px solid #27272a" }}>
+              <h2 className="text-sm font-semibold" style={{ color: "#fafafa" }}>Logs</h2>
             </div>
 
-            <div className="h-[600px] overflow-auto p-4 font-mono text-sm bg-slate-950 text-slate-200">
+            <div className="h-[600px] overflow-auto p-4 font-mono text-sm" style={{ backgroundColor: "#09090b", color: "#e2e8f0" }}>
               {allLogs.length === 0 ? (
-                <p className="text-slate-500">No logs yet...</p>
+                <p style={{ color: "#52525b" }}>No logs yet...</p>
               ) : (
                   allLogs.map((log, i) => (
                   <div key={i} className="py-1 flex gap-2">
                     <LogLevelBadge level={log.level} />
-                    <span className="text-slate-400 shrink-0">
+                    <span className="shrink-0" style={{ color: "#71717a" }}>
                       {new Date(getLogTimestamp(log)).toLocaleTimeString()}
                     </span>
-                    <span className="break-all">{log.message}</span>
+                    <span className="break-all" style={{ color: "#e2e8f0" }}>{log.message}</span>
                     {log.url && (
-                      <span className="text-slate-500 truncate shrink-0 max-w-[200px]">
+                      <span className="truncate shrink-0 max-w-[200px]" style={{ color: "#52525b" }}>
                         {log.url}
                       </span>
                     )}
@@ -355,19 +367,29 @@ function CrawlDetailPage() {
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const styles: Record<string, string> = {
-    pending: "bg-yellow-100 text-yellow-800",
-    running: "bg-blue-100 text-blue-800",
-    uploading: "bg-indigo-100 text-indigo-800",
-    completed: "bg-green-100 text-green-800",
-    failed: "bg-red-100 text-red-800",
-    cancelled: "bg-gray-100 text-gray-800",
+  const styles: Record<string, { bg: string; color: string }> = {
+    pending: { bg: "rgba(245, 158, 11, 0.15)", color: "#fbbf24" },
+    running: { bg: "rgba(59, 130, 246, 0.15)", color: "#60a5fa" },
+    uploading: { bg: "rgba(99, 102, 241, 0.15)", color: "#818cf8" },
+    completed: { bg: "rgba(34, 197, 94, 0.15)", color: "#4ade80" },
+    failed: { bg: "rgba(239, 68, 68, 0.15)", color: "#f87171" },
+    cancelled: { bg: "rgba(113, 113, 122, 0.15)", color: "#a1a1aa" },
   };
+
+  const style = styles[status] || styles.pending;
 
   return (
     <span
-      className={`px-2 py-1 rounded-full text-xs font-medium ${styles[status] || styles.pending}`}
+      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-mono"
+      style={{ backgroundColor: style.bg, color: style.color }}
     >
+      <span
+        className={`w-1 h-1 rounded-full ${status === "running" || status === "uploading" ? "animate-pulse" : ""}`}
+        style={{
+          backgroundColor: style.color,
+          boxShadow: status === "running" || status === "uploading" ? `0 0 6px ${style.color}` : undefined,
+        }}
+      />
       {status}
     </span>
   );
@@ -391,15 +413,15 @@ function dedupeLogs(logs: CrawlLogLike[]) {
 }
 
 function LogLevelBadge({ level }: { level: string }) {
-  const styles: Record<string, string> = {
-    debug: "text-slate-500",
-    info: "text-blue-400",
-    warn: "text-yellow-400",
-    error: "text-red-400",
+  const colors: Record<string, string> = {
+    debug: "#52525b",
+    info: "#60a5fa",
+    warn: "#fbbf24",
+    error: "#f87171",
   };
 
   return (
-    <span className={`shrink-0 w-12 ${styles[level] || styles.info}`}>
+    <span className="shrink-0 w-12" style={{ color: colors[level] || colors.info }}>
       [{level}]
     </span>
   );

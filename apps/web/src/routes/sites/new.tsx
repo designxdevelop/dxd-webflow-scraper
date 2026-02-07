@@ -1,8 +1,9 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { motion } from "framer-motion";
 import { sitesApi, type CreateSiteInput } from "@/lib/api";
 import { useState } from "react";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Plus } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 
 type ScheduleFrequency = "daily" | "weekly";
@@ -81,57 +82,66 @@ function NewSitePage() {
     : null;
 
   return (
-    <div className="p-8 max-w-2xl">
+    <div className="p-8 max-w-2xl mx-auto">
       <div className="mb-8">
         <Link
           to="/sites"
-          className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground mb-4"
+          className="btn-ghost btn-sm mb-4"
         >
-          <ArrowLeft size={16} />
+          <ArrowLeft size={14} />
           Back to Sites
         </Link>
-        <h1 className="text-2xl font-bold text-foreground">Add New Site</h1>
-        <p className="text-muted-foreground mt-1">Configure a new Webflow site to archive</p>
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3 }}
+        >
+          <span className="text-xs font-mono" style={{ color: "#6366f1" }}>
+            sites/new
+          </span>
+          <h1 className="text-2xl font-bold mt-1" style={{ color: "#fafafa" }}>Add New Site</h1>
+          <p className="text-sm mt-1" style={{ color: "#71717a" }}>Configure a new Webflow site to archive</p>
+        </motion.div>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
-        <div className="bg-card border border-border rounded-lg p-6 space-y-4">
-          <h2 className="text-lg font-semibold">Basic Information</h2>
+        <div className="card-dark p-6 space-y-4">
+          <h2 className="text-sm font-semibold" style={{ color: "#fafafa" }}>Basic Information</h2>
 
           <div>
-            <label className="block text-sm font-medium mb-1">Site Name</label>
+            <label className="block text-xs font-medium mb-1" style={{ color: "#71717a" }}>Site Name</label>
             <input
               type="text"
               value={formData.name}
               onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              className="w-full px-3 py-2 border border-input rounded-md bg-background"
+              className="input-dark"
               placeholder="My Webflow Site"
               required
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1">URL</label>
+            <label className="block text-xs font-medium mb-1" style={{ color: "#71717a" }}>URL</label>
             <input
               type="url"
               value={formData.url}
               onChange={(e) => setFormData({ ...formData, url: e.target.value })}
-              className="w-full px-3 py-2 border border-input rounded-md bg-background"
+              className="input-dark"
               placeholder="https://example.webflow.io"
               required
             />
-            <p className="text-xs text-muted-foreground mt-1">
+            <p className="text-xs font-mono mt-1" style={{ color: "#52525b" }}>
               The root URL of the Webflow site to crawl
             </p>
           </div>
         </div>
 
-        <div className="bg-card border border-border rounded-lg p-6 space-y-4">
-          <h2 className="text-lg font-semibold">Crawl Settings</h2>
+        <div className="card-dark p-6 space-y-4">
+          <h2 className="text-sm font-semibold" style={{ color: "#fafafa" }}>Crawl Settings</h2>
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium mb-1">Concurrency</label>
+              <label className="block text-xs font-medium mb-1" style={{ color: "#71717a" }}>Concurrency</label>
               <input
                 type="number"
                 min={1}
@@ -140,13 +150,13 @@ function NewSitePage() {
                 onChange={(e) =>
                   setFormData({ ...formData, concurrency: parseInt(e.target.value) || 5 })
                 }
-                className="w-full px-3 py-2 border border-input rounded-md bg-background"
+                className="input-dark"
               />
-              <p className="text-xs text-muted-foreground mt-1">Pages to crawl in parallel</p>
+              <p className="text-xs font-mono mt-1" style={{ color: "#52525b" }}>Pages to crawl in parallel</p>
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-1">Max Pages</label>
+              <label className="block text-xs font-medium mb-1" style={{ color: "#71717a" }}>Max Pages</label>
               <input
                 type="number"
                 min={1}
@@ -157,14 +167,14 @@ function NewSitePage() {
                     maxPages: e.target.value ? parseInt(e.target.value) : null,
                   })
                 }
-                className="w-full px-3 py-2 border border-input rounded-md bg-background"
+                className="input-dark"
                 placeholder="Unlimited"
               />
-              <p className="text-xs text-muted-foreground mt-1">Leave empty for unlimited</p>
+              <p className="text-xs font-mono mt-1" style={{ color: "#52525b" }}>Leave empty for unlimited</p>
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-1">Max Archives to Keep</label>
+              <label className="block text-xs font-medium mb-1" style={{ color: "#71717a" }}>Max Archives to Keep</label>
               <input
                 type="number"
                 min={1}
@@ -176,10 +186,10 @@ function NewSitePage() {
                     maxArchivesToKeep: e.target.value ? parseInt(e.target.value, 10) : null,
                   })
                 }
-                className="w-full px-3 py-2 border border-input rounded-md bg-background"
+                className="input-dark"
                 placeholder="Unlimited"
               />
-              <p className="text-xs text-muted-foreground mt-1">
+              <p className="text-xs font-mono mt-1" style={{ color: "#52525b" }}>
                 Oldest archives are deleted after this many are kept
               </p>
             </div>
@@ -194,14 +204,15 @@ function NewSitePage() {
                 setFormData({ ...formData, removeWebflowBadge: e.target.checked })
               }
               className="rounded"
+              style={{ accentColor: "#6366f1" }}
             />
-            <label htmlFor="removeWebflowBadge" className="text-sm">
+            <label htmlFor="removeWebflowBadge" className="text-sm" style={{ color: "#a1a1aa" }}>
               Remove Webflow badge
             </label>
           </div>
 
           <div>
-            <label className="block text-sm font-medium mb-1">Site Download Blacklist (Optional)</label>
+            <label className="block text-xs font-medium mb-1" style={{ color: "#71717a" }}>Site Download Blacklist (Optional)</label>
             <textarea
               value={(formData.downloadBlacklist || []).join("\n")}
               onChange={(e) =>
@@ -213,17 +224,17 @@ function NewSitePage() {
                     .filter((line) => line.length > 0),
                 })
               }
-              className="w-full min-h-28 px-3 py-2 border border-input rounded-md bg-background font-mono text-xs"
+              className="input-dark min-h-28 font-mono text-xs resize-y"
               placeholder={"https://cdn.example.com/script.js\nhttps://cdn.example.com/embeds/*"}
             />
-            <p className="text-xs text-muted-foreground mt-1">
+            <p className="text-xs font-mono mt-1" style={{ color: "#52525b" }}>
               These rules apply only to this site and are merged with global blacklist rules.
             </p>
           </div>
         </div>
 
-        <div className="bg-card border border-border rounded-lg p-6 space-y-4">
-          <h2 className="text-lg font-semibold">Schedule (Optional)</h2>
+        <div className="card-dark p-6 space-y-4">
+          <h2 className="text-sm font-semibold" style={{ color: "#fafafa" }}>Schedule (Optional)</h2>
 
           <div className="flex items-center gap-2">
             <input
@@ -234,8 +245,9 @@ function NewSitePage() {
                 setFormData({ ...formData, scheduleEnabled: e.target.checked })
               }
               className="rounded"
+              style={{ accentColor: "#6366f1" }}
             />
-            <label htmlFor="scheduleEnabled" className="text-sm">
+            <label htmlFor="scheduleEnabled" className="text-sm" style={{ color: "#a1a1aa" }}>
               Enable scheduled crawls
             </label>
           </div>
@@ -243,27 +255,19 @@ function NewSitePage() {
           {formData.scheduleEnabled && (
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium mb-1">Frequency</label>
-                <div className="flex gap-3">
+                <label className="block text-xs font-medium mb-2" style={{ color: "#71717a" }}>Frequency</label>
+                <div className="flex gap-2">
                   <button
                     type="button"
                     onClick={() => setScheduleFrequency("daily")}
-                    className={`px-3 py-2 rounded-md text-sm border ${
-                      scheduleFrequency === "daily"
-                        ? "bg-primary text-primary-foreground border-primary"
-                        : "bg-background border-input"
-                    }`}
+                    className={scheduleFrequency === "daily" ? "btn-primary btn-sm" : "btn-secondary btn-sm"}
                   >
                     Daily
                   </button>
                   <button
                     type="button"
                     onClick={() => setScheduleFrequency("weekly")}
-                    className={`px-3 py-2 rounded-md text-sm border ${
-                      scheduleFrequency === "weekly"
-                        ? "bg-primary text-primary-foreground border-primary"
-                        : "bg-background border-input"
-                    }`}
+                    className={scheduleFrequency === "weekly" ? "btn-primary btn-sm" : "btn-secondary btn-sm"}
                   >
                     Weekly
                   </button>
@@ -272,8 +276,8 @@ function NewSitePage() {
 
               {scheduleFrequency === "weekly" && (
                 <div>
-                  <label className="block text-sm font-medium mb-1">Days</label>
-                  <div className="flex flex-wrap gap-2">
+                  <label className="block text-xs font-medium mb-2" style={{ color: "#71717a" }}>Days</label>
+                  <div className="flex flex-wrap gap-1.5">
                     {WEEKDAYS.map((day) => {
                       const isSelected = scheduleDays.includes(day.value);
                       return (
@@ -286,11 +290,12 @@ function NewSitePage() {
                               : [...scheduleDays, day.value];
                             setScheduleDays(next.length > 0 ? next : ["1"]);
                           }}
-                          className={`px-2 py-1 rounded-md text-xs border ${
-                            isSelected
-                              ? "bg-primary text-primary-foreground border-primary"
-                              : "bg-background border-input"
-                          }`}
+                          className="px-2.5 py-1 rounded-md text-xs font-medium transition-all"
+                          style={{
+                            backgroundColor: isSelected ? "#6366f1" : "#18181b",
+                            color: isSelected ? "white" : "#a1a1aa",
+                            border: `1px solid ${isSelected ? "#6366f1" : "#27272a"}`,
+                          }}
                         >
                           {day.label}
                         </button>
@@ -301,21 +306,21 @@ function NewSitePage() {
               )}
 
               <div>
-                <label className="block text-sm font-medium mb-1">Time</label>
+                <label className="block text-xs font-medium mb-1" style={{ color: "#71717a" }}>Time</label>
                 <input
                   type="time"
                   value={scheduleTime}
                   onChange={(e) => setScheduleTime(e.target.value)}
-                  className="w-full px-3 py-2 border border-input rounded-md bg-background"
+                  className="input-dark"
                 />
-                <p className="text-xs text-muted-foreground mt-1">
+                <p className="text-xs font-mono mt-1" style={{ color: "#52525b" }}>
                   Times are interpreted in the server timezone (UTC on Railway)
                 </p>
               </div>
 
               <div>
-                <label className="block text-sm font-medium mb-1">Generated Cron</label>
-                <div className="px-3 py-2 border border-input rounded-md bg-muted/30 font-mono text-sm">
+                <label className="block text-xs font-medium mb-1" style={{ color: "#71717a" }}>Generated Cron</label>
+                <div className="input-dark font-mono text-sm" style={{ backgroundColor: "#09090b" }}>
                   {cronPreview || "Invalid time"}
                 </div>
               </div>
@@ -323,24 +328,27 @@ function NewSitePage() {
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-4">
+        <div className="flex items-center justify-end gap-3">
           <Link
             to="/sites"
-            className="px-4 py-2 text-muted-foreground hover:text-foreground"
+            className="btn-ghost"
           >
             Cancel
           </Link>
-          <button
+          <motion.button
             type="submit"
             disabled={createMutation.isPending}
-            className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50"
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            className="btn-primary disabled:opacity-50"
           >
+            <Plus size={16} />
             {createMutation.isPending ? "Creating..." : "Create Site"}
-          </button>
+          </motion.button>
         </div>
 
         {createMutation.isError && (
-          <p className="text-sm text-destructive">
+          <p className="text-sm font-mono" style={{ color: "#ef4444" }}>
             Failed to create site. Please try again.
           </p>
         )}

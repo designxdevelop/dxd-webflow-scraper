@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { settingsApi } from "@/lib/api";
 import { useState, useEffect } from "react";
-import { Save, Check, Shield, Sliders } from "lucide-react";
+import { Save, Check, Shield, Sliders, RotateCcw } from "lucide-react";
 
 export const Route = createFileRoute("/settings")({
   component: SettingsPage,
@@ -60,12 +60,12 @@ function SettingsPage() {
 
   if (isLoading) {
     return (
-      <div className="p-8 flex items-center justify-center">
+      <div className="p-8 flex items-center justify-center py-20">
         <motion.div
           animate={{ rotate: 360 }}
           transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
           className="w-8 h-8 border-2 rounded-full"
-          style={{ borderColor: "#E8E4DE", borderTopColor: "#D4745E" }}
+          style={{ borderColor: "#27272a", borderTopColor: "#6366f1" }}
         />
       </div>
     );
@@ -75,18 +75,18 @@ function SettingsPage() {
     <div className="p-8 max-w-3xl mx-auto">
       {/* Header */}
       <motion.div
-        initial={{ opacity: 0, y: -20 }}
+        initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5 }}
+        transition={{ duration: 0.3 }}
         className="mb-8"
       >
-        <span className="text-sm font-medium tracking-wider uppercase" style={{ color: "#D4745E" }}>
-          Configuration
+        <span className="text-xs font-mono" style={{ color: "#6366f1" }}>
+          settings/global
         </span>
-        <h1 className="text-4xl font-bold mt-2 mb-2" style={{ fontFamily: "Crimson Pro, serif", color: "#1A1714" }}>
+        <h1 className="text-2xl font-bold mt-1 mb-1" style={{ color: "#fafafa" }}>
           Settings
         </h1>
-        <p className="text-base" style={{ color: "#8B8680" }}>
+        <p className="text-sm" style={{ color: "#71717a" }}>
           Configure global application preferences and defaults
         </p>
       </motion.div>
@@ -94,27 +94,23 @@ function SettingsPage() {
       <form onSubmit={handleSubmit} className="space-y-6">
         {/* Default Scrape Settings */}
         <motion.div
-          initial={{ opacity: 0, y: 20 }}
+          initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1, duration: 0.5 }}
-          className="rounded-2xl p-6 space-y-6"
-          style={{
-            backgroundColor: "#FEFDFB",
-            border: "1px solid #E8E4DE",
-          }}
+          transition={{ delay: 0.05, duration: 0.3 }}
+          className="card-dark p-6 space-y-6"
         >
-          <div className="flex items-center gap-3 mb-4">
+          <div className="flex items-center gap-3 mb-2">
             <div
-              className="p-2.5 rounded-xl"
-              style={{ backgroundColor: "rgba(107, 142, 107, 0.1)" }}
+              className="p-2 rounded-lg"
+              style={{ backgroundColor: "rgba(99, 102, 241, 0.1)" }}
             >
-              <Sliders size={20} style={{ color: "#6B8E6B" }} />
+              <Sliders size={18} style={{ color: "#818cf8" }} />
             </div>
             <div>
-              <h2 className="text-lg font-semibold" style={{ color: "#1A1714" }}>
+              <h2 className="text-sm font-semibold" style={{ color: "#fafafa" }}>
                 Default Scrape Settings
               </h2>
-              <p className="text-sm" style={{ color: "#8B8680" }}>
+              <p className="text-xs" style={{ color: "#71717a" }}>
                 These defaults are used when creating new sites
               </p>
             </div>
@@ -122,7 +118,7 @@ function SettingsPage() {
 
           <div className="grid grid-cols-2 gap-6">
             <div>
-              <label className="block text-sm font-semibold mb-2" style={{ color: "#4A453F" }}>
+              <label className="block text-xs font-medium mb-1" style={{ color: "#71717a" }}>
                 Default Concurrency
               </label>
               <input
@@ -136,20 +132,15 @@ function SettingsPage() {
                     defaultConcurrency: parseInt(e.target.value) || 5,
                   })
                 }
-                className="w-full px-4 py-3 rounded-xl text-sm transition-all"
-                style={{
-                  backgroundColor: "#F5F2ED",
-                  border: "1px solid #E8E4DE",
-                  color: "#1A1714",
-                }}
+                className="input-dark"
               />
-              <p className="text-xs mt-1.5" style={{ color: "#A9A49E" }}>
+              <p className="text-xs font-mono mt-1" style={{ color: "#52525b" }}>
                 Number of parallel requests (1-30)
               </p>
             </div>
 
             <div>
-              <label className="block text-sm font-semibold mb-2" style={{ color: "#4A453F" }}>
+              <label className="block text-xs font-medium mb-1" style={{ color: "#71717a" }}>
                 Default Max Pages
               </label>
               <input
@@ -159,15 +150,10 @@ function SettingsPage() {
                 onChange={(e) =>
                   setFormData({ ...formData, defaultMaxPages: e.target.value })
                 }
-                className="w-full px-4 py-3 rounded-xl text-sm transition-all"
-                style={{
-                  backgroundColor: "#F5F2ED",
-                  border: "1px solid #E8E4DE",
-                  color: "#1A1714",
-                }}
+                className="input-dark"
                 placeholder="Unlimited"
               />
-              <p className="text-xs mt-1.5" style={{ color: "#A9A49E" }}>
+              <p className="text-xs font-mono mt-1" style={{ color: "#52525b" }}>
                 Leave empty for unlimited
               </p>
             </div>
@@ -176,47 +162,37 @@ function SettingsPage() {
 
         {/* Global Download Blacklist */}
         <motion.div
-          initial={{ opacity: 0, y: 20 }}
+          initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2, duration: 0.5 }}
-          className="rounded-2xl p-6 space-y-4"
-          style={{
-            backgroundColor: "#FEFDFB",
-            border: "1px solid #E8E4DE",
-          }}
+          transition={{ delay: 0.1, duration: 0.3 }}
+          className="card-dark p-6 space-y-4"
         >
-          <div className="flex items-center gap-3 mb-4">
+          <div className="flex items-center gap-3 mb-2">
             <div
-              className="p-2.5 rounded-xl"
-              style={{ backgroundColor: "rgba(212, 116, 94, 0.1)" }}
+              className="p-2 rounded-lg"
+              style={{ backgroundColor: "rgba(239, 68, 68, 0.1)" }}
             >
-              <Shield size={20} style={{ color: "#D4745E" }} />
+              <Shield size={18} style={{ color: "#f87171" }} />
             </div>
             <div>
-              <h2 className="text-lg font-semibold" style={{ color: "#1A1714" }}>
+              <h2 className="text-sm font-semibold" style={{ color: "#fafafa" }}>
                 Global Download Blacklist
               </h2>
-              <p className="text-sm" style={{ color: "#8B8680" }}>
+              <p className="text-xs" style={{ color: "#71717a" }}>
                 URLs to exclude from all crawls
               </p>
             </div>
           </div>
 
           <div
-            className="p-4 rounded-xl text-sm"
-            style={{ backgroundColor: "#F5F2ED" }}
+            className="p-3 rounded-lg text-sm"
+            style={{ backgroundColor: "#09090b", border: "1px solid #27272a" }}
           >
-            <p style={{ color: "#8B8680" }}>
+            <p style={{ color: "#71717a" }}>
               One rule per line. Use a full URL or a URL prefix ending with{" "}
-              <code
-                className="px-1.5 py-0.5 rounded text-xs font-mono"
-                style={{ backgroundColor: "#E8E4DE", color: "#4A453F" }}
-              >
-                *
-              </code>
-              .
+              <code className="code">*</code>.
             </p>
-            <p className="text-xs mt-2" style={{ color: "#A9A49E" }}>
+            <p className="text-xs font-mono mt-1.5" style={{ color: "#52525b" }}>
               Built-in defaults are included automatically. Saving custom rules will not remove
               core defaults.
             </p>
@@ -230,12 +206,7 @@ function SettingsPage() {
                 globalDownloadBlacklist: e.target.value,
               })
             }
-            className="w-full min-h-40 px-4 py-3 rounded-xl text-sm font-mono resize-y"
-            style={{
-              backgroundColor: "#F5F2ED",
-              border: "1px solid #E8E4DE",
-              color: "#1A1714",
-            }}
+            className="input-dark min-h-40 font-mono text-xs resize-y"
             placeholder={"https://example.com/tracker.js\ndomain:example-tracker.com"}
           />
 
@@ -248,13 +219,9 @@ function SettingsPage() {
                   globalDownloadBlacklist: defaultGlobalBlacklist,
                 })
               }
-              className="px-4 py-2 text-sm font-medium rounded-lg transition-colors"
-              style={{
-                backgroundColor: "#F5F2ED",
-                color: "#4A453F",
-                border: "1px solid #E8E4DE",
-              }}
+              className="btn-ghost btn-sm"
             >
+              <RotateCcw size={14} />
               Reset to Defaults
             </button>
           </div>
@@ -262,30 +229,26 @@ function SettingsPage() {
 
         {/* Save Button */}
         <motion.div
-          initial={{ opacity: 0, y: 20 }}
+          initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3, duration: 0.5 }}
-          className="flex items-center justify-end gap-4 pt-4"
+          transition={{ delay: 0.15, duration: 0.3 }}
+          className="flex items-center justify-end gap-4 pt-2"
         >
           <motion.button
             type="submit"
             disabled={updateMutation.isPending}
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
-            className="flex items-center gap-2 px-6 py-3 rounded-xl text-sm font-semibold transition-all disabled:opacity-50"
-            style={{
-              backgroundColor: saved ? "#6B8E6B" : "#D4745E",
-              color: "white",
-            }}
+            className={saved ? "btn-success disabled:opacity-50" : "btn-primary disabled:opacity-50"}
           >
             {saved ? (
               <>
-                <Check size={18} />
+                <Check size={16} />
                 Saved Successfully
               </>
             ) : (
               <>
-                <Save size={18} />
+                <Save size={16} />
                 {updateMutation.isPending ? "Saving..." : "Save Settings"}
               </>
             )}

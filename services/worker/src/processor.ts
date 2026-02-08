@@ -1,6 +1,6 @@
 import { Worker, Job, Queue, UnrecoverableError } from "bullmq";
 import Redis from "ioredis";
-import { eq, and, or, inArray, lte, desc, isNotNull } from "drizzle-orm";
+import { eq, and, inArray, lte, desc, isNotNull } from "drizzle-orm";
 import { crawlSite, type CrawlProgress, type LogLevel } from "@dxd/scraper";
 import { getStorage } from "@dxd/storage";
 import { db, sites, crawls, crawlLogs, settings } from "./db.js";
@@ -665,7 +665,7 @@ async function reconcileOrphanedCrawls(): Promise<void> {
   const possiblyOrphaned = await db.query.crawls.findMany({
     where: and(
       inArray(crawls.status, ["pending", "running", "uploading"]),
-      or(eq(crawls.status, "pending"), lte(crawls.createdAt, cutoff))
+      lte(crawls.createdAt, cutoff)
     ),
     limit: 50,
   });
@@ -736,7 +736,7 @@ export function startWorker() {
   // Use conservative defaults to avoid duplicate retry attempts on healthy long-running jobs.
   const lockDuration = parsePositiveIntEnv("WORKER_LOCK_DURATION_MS", 900000);
   const stalledInterval = parsePositiveIntEnv("WORKER_STALLED_INTERVAL_MS", 120000);
-  const maxStalledCount = parsePositiveIntEnv("WORKER_MAX_STALLED_COUNT", 2);
+  const maxStalledCount = parsePositiveIntEnv("WORKER_MAX_STALLED_COUNT", 1);
 
   const worker = new Worker<CrawlJobData>("crawl-jobs", processCrawlJob, {
     connection: workerConnection,
@@ -762,16 +762,10 @@ export function startWorker() {
 
   worker.on("completed", (completedJob) => {
     console.log(`[Worker] Job completed: ${completedJob.id}`);
-    void reconcileOrphanedCrawls().catch((error) => {
-      console.error("[Worker] Failed post-completion orphan reconciliation:", error);
-    });
   });
 
   worker.on("failed", (failedJob, error) => {
     console.error(`[Worker] Job failed: ${failedJob?.id}`, error.message);
-    void reconcileOrphanedCrawls().catch((reconcileError) => {
-      console.error("[Worker] Failed post-failure orphan reconciliation:", reconcileError);
-    });
   });
 
   worker.on("error", (error) => {

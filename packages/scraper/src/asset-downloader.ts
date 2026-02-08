@@ -13,6 +13,7 @@ type CategoryDir = Record<AssetCategory, string>;
 type AssetDownloaderOptions = {
   downloadBlacklist?: string[];
   globalDownloadBlacklist?: string[];
+  shouldAbort?: () => boolean | Promise<boolean>;
 };
 
 const DEFAULT_GLOBAL_DOWNLOAD_BLACKLIST = [
@@ -42,6 +43,21 @@ const DEFAULT_GLOBAL_DOWNLOAD_BLACKLIST = [
   "domain:partnerstack.com",
   "domain:taboola.com",
 ];
+const CRAWL_ABORT_MESSAGE = "Crawl cancelled by request.";
+
+function readPositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+
+  return parsed;
+}
 
 export class AssetDownloader {
   private cache = new Map<string, string>();
@@ -51,9 +67,13 @@ export class AssetDownloader {
   private blacklistLogCache = new Set<string>();
   /** B6: Optional cross-crawl disk cache. */
   private diskCache: AssetCache | null;
+  private shouldAbort?: () => boolean | Promise<boolean>;
+  private readonly fetchTimeoutMs: number;
 
   constructor(private outputDir: string, diskCache?: AssetCache, options?: AssetDownloaderOptions) {
     this.diskCache = diskCache ?? null;
+    this.shouldAbort = options?.shouldAbort;
+    this.fetchTimeoutMs = readPositiveIntEnv("ASSET_FETCH_TIMEOUT_MS", 20000);
     this.blacklist = normalizeBlacklist([
       ...DEFAULT_GLOBAL_DOWNLOAD_BLACKLIST,
       ...(options?.globalDownloadBlacklist ?? []),
@@ -94,6 +114,8 @@ export class AssetDownloader {
 
     let relativePath: string | undefined;
     try {
+      await this.assertNotAborted();
+
       // B6: Check disk cache before network fetch
       if (this.diskCache && category !== "css" && category !== "js") {
         // Only cache binary assets — CSS/JS need URL rewriting which is context-dependent
@@ -107,7 +129,7 @@ export class AssetDownloader {
         }
       }
 
-      const res = await fetch(normalized, {
+      const res = await this.fetchWithTimeout(normalized, {
         redirect: "follow",
         headers: {
           "user-agent":
@@ -120,6 +142,7 @@ export class AssetDownloader {
       }
 
       if (category === "css") {
+        await this.assertNotAborted();
         let cssContent = await res.text();
         cssContent = await this.rewriteCssUrls(cssContent, normalized);
         relativePath = this.buildRelativePath(normalized, "css", ".css");
@@ -127,6 +150,7 @@ export class AssetDownloader {
         cssContent = this.rewriteArchiveRootPathsInCss(cssContent, cssDir);
         await this.writeTextAssetByRelativePath(relativePath, cssContent);
       } else if (category === "js") {
+        await this.assertNotAborted();
         let jsContent = await res.text();
         jsContent = await this.rewriteJsUrls(jsContent, normalized);
         relativePath = this.buildRelativePath(normalized, "js", ".js");
@@ -134,6 +158,7 @@ export class AssetDownloader {
         jsContent = this.rewriteArchiveRootPathsInJs(jsContent, jsDir);
         await this.writeTextAssetByRelativePath(relativePath, jsContent);
       } else {
+        await this.assertNotAborted();
         const contentType = res.headers.get("content-type");
         const buffer = Buffer.from(await res.arrayBuffer());
         relativePath = await this.writeBinaryAsset(buffer, normalized, category, contentType);
@@ -144,6 +169,9 @@ export class AssetDownloader {
         }
       }
     } catch (error) {
+      if (this.isAbortError(error)) {
+        throw error;
+      }
       log.warn(`Could not download ${normalized}: ${(error as Error).message}`);
       return normalized;
     }
@@ -177,7 +205,8 @@ export class AssetDownloader {
       return this.directPathCache.get(cacheKey)!;
     }
 
-    const res = await fetch(normalized, {
+    await this.assertNotAborted();
+    const res = await this.fetchWithTimeout(normalized, {
       redirect: "follow",
       headers: {
         "user-agent":
@@ -192,6 +221,7 @@ export class AssetDownloader {
 
     const diskPath = path.join(this.outputDir, safeRelativePath);
     await fs.ensureDir(path.dirname(diskPath));
+    await this.assertNotAborted();
     await fs.writeFile(diskPath, Buffer.from(await res.arrayBuffer()));
 
     const webPath = `/${safeRelativePath}`;
@@ -291,6 +321,40 @@ export class AssetDownloader {
       return parsed.toString();
     } catch {
       return undefined;
+    }
+  }
+
+  private async assertNotAborted(): Promise<void> {
+    if (!this.shouldAbort) {
+      return;
+    }
+
+    if (await this.shouldAbort()) {
+      throw new Error(CRAWL_ABORT_MESSAGE);
+    }
+  }
+
+  private isAbortError(error: unknown): boolean {
+    return error instanceof Error && error.message.includes(CRAWL_ABORT_MESSAGE);
+  }
+
+  private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort("timeout"), this.fetchTimeoutMs);
+
+    try {
+      const res = await fetch(url, {
+        ...init,
+        signal: controller.signal,
+      });
+      return res;
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw new Error(`Asset download timeout after ${this.fetchTimeoutMs}ms: ${url}`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 

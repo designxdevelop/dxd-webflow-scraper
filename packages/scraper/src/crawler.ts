@@ -221,6 +221,7 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
     const assetDownloader = new AssetDownloader(resolvedOutput, assetCache, {
       downloadBlacklist: options.downloadBlacklist,
       globalDownloadBlacklist: options.globalDownloadBlacklist,
+      shouldAbort: options.shouldAbort,
     });
     await assetDownloader.init();
 

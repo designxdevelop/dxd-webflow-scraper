@@ -73,6 +73,7 @@ async function checkScheduledCrawls() {
         },
         {
           jobId: crawl.id,
+          attempts: 1,
         }
       );
 

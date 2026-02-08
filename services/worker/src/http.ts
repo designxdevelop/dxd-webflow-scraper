@@ -11,8 +11,7 @@ const crawlQueue = new Queue("crawl-jobs", {
   defaultJobOptions: {
     removeOnComplete: 100,
     removeOnFail: 100,
-    attempts: 3,
-    backoff: { type: "exponential", delay: 1000 },
+    attempts: 1,
   },
 });
 

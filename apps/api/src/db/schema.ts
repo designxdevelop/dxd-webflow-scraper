@@ -129,6 +129,13 @@ export const crawls = pgTable("crawls", {
   succeededPages: integer("succeeded_pages").default(0),
   failedPages: integer("failed_pages").default(0),
 
+  // Upload progress (for status = "uploading")
+  uploadTotalBytes: bigint("upload_total_bytes", { mode: "number" }),
+  uploadUploadedBytes: bigint("upload_uploaded_bytes", { mode: "number" }),
+  uploadFilesTotal: integer("upload_files_total"),
+  uploadFilesUploaded: integer("upload_files_uploaded"),
+  uploadCurrentFile: varchar("upload_current_file", { length: 500 }),
+
   // Output
   outputPath: varchar("output_path", { length: 500 }),
   outputSizeBytes: bigint("output_size_bytes", { mode: "number" }),

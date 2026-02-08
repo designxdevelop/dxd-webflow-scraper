@@ -41,6 +41,7 @@ function CrawlsPage() {
   const crawls = data?.crawls || [];
 
   const runningCount = crawls.filter((c) => c.status === "running").length;
+  const uploadingCount = crawls.filter((c) => c.status === "uploading").length;
   const completedCount = crawls.filter((c) => c.status === "completed").length;
   const failedCount = crawls.filter((c) => c.status === "failed").length;
 
@@ -90,6 +91,14 @@ function CrawlsPage() {
               <span style={{ color: "#fafafa" }}>{runningCount}</span> running
             </span>
           </div>
+          {uploadingCount > 0 && (
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full" style={{ backgroundColor: "#8b5cf6", boxShadow: "0 0 6px #8b5cf6" }} />
+              <span className="text-sm font-mono" style={{ color: "#71717a" }}>
+                <span style={{ color: "#fafafa" }}>{uploadingCount}</span> uploading
+              </span>
+            </div>
+          )}
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full" style={{ backgroundColor: "#22c55e" }} />
             <span className="text-sm font-mono" style={{ color: "#71717a" }}>
@@ -146,9 +155,14 @@ function CrawlsPage() {
                       ? formatDuration(Date.now() - new Date(crawl.startedAt).getTime())
                       : "-";
 
-                  const progress = crawl.totalPages
+                  const isUploading = crawl.status === "uploading";
+                  const uploadPercent = isUploading && crawl.uploadTotalBytes
+                    ? Math.round(((crawl.uploadUploadedBytes || 0) / crawl.uploadTotalBytes) * 100)
+                    : 0;
+                  const crawlProgress = crawl.totalPages
                     ? Math.round(((crawl.succeededPages || 0) / crawl.totalPages) * 100)
                     : 0;
+                  const progress = isUploading ? uploadPercent : crawlProgress;
 
                   return (
                     <motion.tr
@@ -184,12 +198,17 @@ function CrawlsPage() {
                                   ? "linear-gradient(90deg, #ef4444 0%, #f87171 100%)"
                                   : crawl.status === "completed"
                                     ? "linear-gradient(90deg, #22c55e 0%, #4ade80 100%)"
-                                    : undefined,
+                                    : isUploading
+                                      ? "linear-gradient(90deg, #8b5cf6 0%, #a78bfa 100%)"
+                                      : undefined,
                               }}
                             />
                           </div>
                           <span className="text-xs font-mono" style={{ color: "#71717a" }}>
-                            {crawl.succeededPages ?? 0}/{crawl.totalPages ?? "?"}
+                            {isUploading
+                              ? `${progress}%`
+                              : `${crawl.succeededPages ?? 0}/${crawl.totalPages ?? "?"}`
+                            }
                           </span>
                         </div>
                       </td>
@@ -281,9 +300,14 @@ function CrawlsPage() {
                   ? formatDuration(Date.now() - new Date(crawl.startedAt).getTime())
                   : "-";
 
-              const progress = crawl.totalPages
+              const isUploading = crawl.status === "uploading";
+              const uploadPercent = isUploading && crawl.uploadTotalBytes
+                ? Math.round(((crawl.uploadUploadedBytes || 0) / crawl.uploadTotalBytes) * 100)
+                : 0;
+              const crawlProgress = crawl.totalPages
                 ? Math.round(((crawl.succeededPages || 0) / crawl.totalPages) * 100)
                 : 0;
+              const progress = isUploading ? uploadPercent : crawlProgress;
 
               return (
                 <motion.div
@@ -317,12 +341,17 @@ function CrawlsPage() {
                             ? "linear-gradient(90deg, #ef4444 0%, #f87171 100%)"
                             : crawl.status === "completed"
                               ? "linear-gradient(90deg, #22c55e 0%, #4ade80 100%)"
-                              : undefined,
+                              : isUploading
+                                ? "linear-gradient(90deg, #8b5cf6 0%, #a78bfa 100%)"
+                                : undefined,
                         }}
                       />
                     </div>
                     <span className="text-xs font-mono shrink-0" style={{ color: "#71717a" }}>
-                      {crawl.succeededPages ?? 0}/{crawl.totalPages ?? "?"}
+                      {isUploading
+                        ? `${progress}%`
+                        : `${crawl.succeededPages ?? 0}/${crawl.totalPages ?? "?"}`
+                      }
                     </span>
                   </div>
                   

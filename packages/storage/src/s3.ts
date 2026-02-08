@@ -16,7 +16,7 @@ import {
   CompleteMultipartUploadCommand,
   AbortMultipartUploadCommand,
 } from "@aws-sdk/client-s3";
-import type { MoveToFinalOptions, StorageAdapter } from "./adapter.js";
+import type { MoveToFinalOptions, StorageAdapter, MultipartUploadOptions, WriteStreamOptions, MultipartUploadProgress } from "./adapter.js";
 
 type S3Config = {
   endpoint: string;
@@ -101,7 +101,7 @@ export class S3Storage implements StorageAdapter {
     }
   }
 
-  async writeStream(filePath: string, stream: ReadableStream<Uint8Array>): Promise<void> {
+  async writeStream(filePath: string, stream: ReadableStream<Uint8Array>, options?: WriteStreamOptions): Promise<void> {
     const uploadTempDir = path.join(this.tempRoot, ".stream-uploads");
     await fsp.mkdir(uploadTempDir, { recursive: true });
 
@@ -112,7 +112,7 @@ export class S3Storage implements StorageAdapter {
       await pipeline(Readable.fromWeb(stream as any), fs.createWriteStream(tempFilePath));
       const stat = await fsp.stat(tempFilePath);
 
-      await this.putObjectWithFallback(filePath, tempFilePath, stat.size);
+      await this.putObjectWithFallback(filePath, tempFilePath, stat.size, options);
     } finally {
       await fsp.unlink(tempFilePath).catch(() => undefined);
     }
@@ -303,7 +303,7 @@ export class S3Storage implements StorageAdapter {
     return filePath;
   }
 
-  private async putObjectWithFallback(key: string, localFilePath: string, size: number): Promise<void> {
+  private async putObjectWithFallback(key: string, localFilePath: string, size: number, options?: MultipartUploadOptions): Promise<void> {
     try {
       if (size === 0) {
         await this.putObjectFromBuffer(key, localFilePath);
@@ -311,7 +311,7 @@ export class S3Storage implements StorageAdapter {
       }
 
       // Use multipart for all non-empty files to keep uploads retryable per-part.
-      await this.putObjectMultipart(key, localFilePath, size);
+      await this.putObjectMultipart(key, localFilePath, size, options);
     } catch (error) {
       if (
         (isChecksumMismatchError(error) || isSignatureMismatchError(error) || isRetryableUploadError(error)) &&
@@ -338,11 +338,22 @@ export class S3Storage implements StorageAdapter {
     );
   }
 
-  private async putObjectMultipart(key: string, localFilePath: string, size: number): Promise<void> {
+  private async putObjectMultipart(key: string, localFilePath: string, size: number, options?: MultipartUploadOptions): Promise<void> {
     const partSize = resolveMultipartPartSize(size, this.multipartPartSizeBytes);
+    const totalParts = Math.ceil(size / partSize);
     let uploadId: string | undefined;
     let fileHandle: fsp.FileHandle | undefined;
     const completedParts: Array<{ ETag: string; PartNumber: number }> = [];
+    let uploadedBytes = 0;
+
+    // Report initial progress (0%)
+    await options?.onProgress?.({
+      totalBytes: size,
+      uploadedBytes: 0,
+      partNumber: 0,
+      totalParts,
+      currentPartBytes: 0,
+    });
 
     try {
       const created = await this.sendWithDiagnostics("CreateMultipartUpload", () =>
@@ -381,8 +392,25 @@ export class S3Storage implements StorageAdapter {
           ETag: etag,
           PartNumber: partNumber,
         });
+        uploadedBytes += chunk.length;
         offset += chunk.length;
+
+        // Report progress after each part
+        await options?.onProgress?.({
+          totalBytes: size,
+          uploadedBytes,
+          partNumber,
+          totalParts,
+          currentPartBytes: chunk.length,
+        });
+
         partNumber += 1;
+
+        // Add delay between parts to prevent TCP_OVERWINDOW
+        // Skip delay for the last part
+        if (offset < size && options?.partDelayMs && options.partDelayMs > 0) {
+          await wait(options.partDelayMs);
+        }
       }
 
       if (offset !== size) {

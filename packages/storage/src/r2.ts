@@ -1,4 +1,4 @@
-import type { MoveToFinalOptions, StorageAdapter } from "./adapter.js";
+import type { MoveToFinalOptions, StorageAdapter, WriteStreamOptions } from "./adapter.js";
 
 /**
  * R2Storage implements StorageAdapter using native Cloudflare R2 bucket bindings.
@@ -16,8 +16,9 @@ export class R2Storage implements StorageAdapter {
     await this.bucket.put(filePath, body);
   }
 
-  async writeStream(filePath: string, stream: ReadableStream<Uint8Array>): Promise<void> {
+  async writeStream(filePath: string, stream: ReadableStream<Uint8Array>, _options?: WriteStreamOptions): Promise<void> {
     // R2 accepts ReadableStream directly for uploads
+    // Note: R2 native binding doesn't support multipart progress callbacks yet
     await this.bucket.put(filePath, stream);
   }
 

@@ -73,6 +73,12 @@ export interface Crawl {
   totalPages: number | null;
   succeededPages: number | null;
   failedPages: number | null;
+  // Upload progress fields
+  uploadTotalBytes: number | null;
+  uploadUploadedBytes: number | null;
+  uploadFilesTotal: number | null;
+  uploadFilesUploaded: number | null;
+  uploadCurrentFile: string | null;
   outputPath: string | null;
   outputSizeBytes: number | null;
   errorMessage: string | null;

@@ -10,9 +10,28 @@ export interface MoveToFinalOptions {
   onProgress?: (progress: MoveToFinalProgress) => void | Promise<void>;
 }
 
+export interface MultipartUploadProgress {
+  totalBytes: number;
+  uploadedBytes: number;
+  partNumber: number;
+  totalParts: number;
+  currentPartBytes: number;
+}
+
+export interface MultipartUploadOptions {
+  onProgress?: (progress: MultipartUploadProgress) => void | Promise<void>;
+  // Delay between parts to prevent TCP_OVERWINDOW (ms)
+  partDelayMs?: number;
+}
+
+export interface WriteStreamOptions extends MultipartUploadOptions {
+  // Total file size hint for better progress calculation
+  totalSize?: number;
+}
+
 export interface StorageAdapter {
   writeFile(path: string, content: Buffer | string): Promise<void>;
-  writeStream(path: string, stream: ReadableStream<Uint8Array>): Promise<void>;
+  writeStream(path: string, stream: ReadableStream<Uint8Array>, options?: WriteStreamOptions): Promise<void>;
   readFile(path: string): Promise<Buffer>;
   readStream(path: string): ReadableStream<Uint8Array>;
   listFiles(prefix: string): Promise<string[]>;

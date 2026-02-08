@@ -3,7 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import type { MoveToFinalOptions, StorageAdapter } from "./adapter.js";
+import type { MoveToFinalOptions, StorageAdapter, WriteStreamOptions } from "./adapter.js";
 
 export class LocalStorage implements StorageAdapter {
   constructor(private basePath: string) {}
@@ -14,10 +14,11 @@ export class LocalStorage implements StorageAdapter {
     await fsp.writeFile(fullPath, content);
   }
 
-  async writeStream(filePath: string, stream: ReadableStream<Uint8Array>): Promise<void> {
+  async writeStream(filePath: string, stream: ReadableStream<Uint8Array>, _options?: WriteStreamOptions): Promise<void> {
     const fullPath = path.join(this.basePath, filePath);
     await fsp.mkdir(path.dirname(fullPath), { recursive: true });
     await pipeline(Readable.fromWeb(stream as any), fs.createWriteStream(fullPath));
+    // Note: Local storage doesn't support multipart/progress - options ignored
   }
 
   async readFile(filePath: string): Promise<Buffer> {

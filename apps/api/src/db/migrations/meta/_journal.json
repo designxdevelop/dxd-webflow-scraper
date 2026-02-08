@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1738945920000,
+      "tag": "0000_add_max_archives_to_keep",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1738946520000,
+      "tag": "0001_schema_repair_and_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1738968780000,
+      "tag": "0002_add_upload_progress",
+      "breakpoints": true
+    }
+  ]
+}

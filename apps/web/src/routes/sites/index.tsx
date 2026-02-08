@@ -74,20 +74,20 @@ function SitesPage() {
   };
 
   return (
-    <div className="p-8 max-w-7xl mx-auto">
+    <div className="p-4 md:p-8 max-w-7xl mx-auto">
       {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.3 }}
-        className="mb-8"
+        className="mb-6 md:mb-8"
       >
-        <div className="flex items-start justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
           <div>
             <span className="text-xs font-mono" style={{ color: "#6366f1" }}>
               sites/manage
             </span>
-            <h1 className="text-2xl font-bold mt-1 mb-1" style={{ color: "#fafafa" }}>
+            <h1 className="text-xl md:text-2xl font-bold mt-1 mb-1" style={{ color: "#fafafa" }}>
               Sites
             </h1>
             <p className="text-sm" style={{ color: "#71717a" }}>
@@ -95,10 +95,11 @@ function SitesPage() {
             </p>
           </div>
 
-          <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
-            <Link to="/sites/new" className="btn-primary">
+          <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} className="shrink-0">
+            <Link to="/sites/new" className="btn-primary touch-target-sm" aria-label="Add new site">
               <Plus size={16} />
-              Add Site
+              <span className="hidden sm:inline">Add Site</span>
+              <span className="sm:hidden">Add</span>
             </Link>
           </motion.div>
         </div>
@@ -130,24 +131,26 @@ function SitesPage() {
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            className="flex items-center gap-4 mb-6"
+            className="flex items-center gap-4 mb-4 md:mb-6"
           >
             <div className="flex-1 relative max-w-sm">
-              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "#71717a" }} />
+              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 z-10 pointer-events-none" style={{ color: "#71717a" }} />
               <input
                 type="text"
                 placeholder="Search sites..."
-                className="input-dark pl-10"
+                className="input-dark touch-target-sm"
+                style={{ paddingLeft: "40px" }}
+                aria-label="Search sites"
               />
             </div>
           </motion.div>
 
-          {/* Sites Table */}
+          {/* Desktop: Sites Table */}
           <motion.div
             variants={containerVariants}
             initial="hidden"
             animate="visible"
-            className="card-dark overflow-hidden"
+            className="card-dark overflow-hidden hidden md:block"
           >
             <table className="table-dark">
               <thead>
@@ -236,11 +239,11 @@ function SitesPage() {
                           whileTap={{ scale: 0.95 }}
                           onClick={() => startCrawlMutation.mutate(site.id)}
                           disabled={startCrawlMutation.isPending}
-                          className="p-2 rounded-md transition-colors"
+                          className="p-2 rounded-md transition-colors touch-target-sm"
                           style={{ color: "#22c55e" }}
                           onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "rgba(34, 197, 94, 0.1)")}
                           onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
-                          title="Start Crawl"
+                          aria-label={`Start crawl for ${site.name}`}
                         >
                           <Play size={14} fill="currentColor" />
                         </motion.button>
@@ -253,11 +256,11 @@ function SitesPage() {
                             }
                           }}
                           disabled={deleteMutation.isPending}
-                          className="p-2 rounded-md transition-colors"
+                          className="p-2 rounded-md transition-colors touch-target-sm"
                           style={{ color: "#ef4444" }}
                           onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "rgba(239, 68, 68, 0.1)")}
                           onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
-                          title="Delete"
+                          aria-label={`Delete ${site.name}`}
                         >
                           <Trash2 size={14} />
                         </motion.button>
@@ -267,6 +270,111 @@ function SitesPage() {
                 ))}
               </tbody>
             </table>
+          </motion.div>
+
+          {/* Mobile: Site Cards */}
+          <motion.div
+            variants={containerVariants}
+            initial="hidden"
+            animate="visible"
+            className="md:hidden space-y-3"
+          >
+            {sites.map((site) => (
+              <motion.div
+                key={site.id}
+                variants={itemVariants}
+                className="card-dark p-4"
+              >
+                <div className="flex items-start justify-between mb-3">
+                  <Link
+                    to="/sites/$siteId"
+                    params={{ siteId: site.id }}
+                    className="flex items-center gap-3 min-w-0 flex-1"
+                  >
+                    <div
+                      className="w-10 h-10 shrink-0 rounded-md flex items-center justify-center text-sm font-bold font-mono"
+                      style={{
+                        backgroundColor: "#27272a",
+                        color: "#818cf8",
+                      }}
+                    >
+                      {site.name.charAt(0).toUpperCase()}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-medium text-sm truncate" style={{ color: "#fafafa" }}>
+                        {site.name}
+                      </p>
+                      <a
+                        href={site.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs font-mono flex items-center gap-1 truncate"
+                        style={{ color: "#71717a" }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {formatHostname(site.url)}
+                        <ExternalLink size={10} />
+                      </a>
+                    </div>
+                  </Link>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() => startCrawlMutation.mutate(site.id)}
+                      disabled={startCrawlMutation.isPending}
+                      className="p-2 rounded-md touch-target-sm"
+                      style={{ color: "#22c55e" }}
+                      aria-label={`Start crawl for ${site.name}`}
+                    >
+                      <Play size={16} fill="currentColor" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (confirm("Delete this site?")) {
+                          deleteMutation.mutate(site.id);
+                        }
+                      }}
+                      disabled={deleteMutation.isPending}
+                      className="p-2 rounded-md touch-target-sm"
+                      style={{ color: "#ef4444" }}
+                      aria-label={`Delete ${site.name}`}
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between pt-3 border-t" style={{ borderColor: "#27272a" }}>
+                  <div className="flex items-center gap-2">
+                    {site.lastCrawl ? (
+                      <>
+                        <StatusIndicator status={site.lastCrawl.status || "unknown"} />
+                        <span className="text-xs font-mono" style={{ color: "#71717a" }}>
+                          {new Date(site.lastCrawl.createdAt).toLocaleDateString("en-US", {
+                            month: "short",
+                            day: "numeric",
+                          })}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-xs font-mono" style={{ color: "#52525b" }}>Never crawled</span>
+                    )}
+                  </div>
+                  {site.scheduleEnabled ? (
+                    <span
+                      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-mono"
+                      style={{
+                        backgroundColor: "rgba(34, 197, 94, 0.1)",
+                        color: "#22c55e",
+                      }}
+                    >
+                      <ClockIcon size={12} />
+                      <span className="hidden sm:inline">{site.scheduleCron}</span>
+                    </span>
+                  ) : (
+                    <span className="text-xs font-mono" style={{ color: "#52525b" }}>No schedule</span>
+                  )}
+                </div>
+              </motion.div>
+            ))}
           </motion.div>
         </div>
       )}

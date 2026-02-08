@@ -82,11 +82,11 @@ function NewSitePage() {
     : null;
 
   return (
-    <div className="p-8 max-w-2xl mx-auto">
-      <div className="mb-8">
+    <div className="p-4 md:p-8 max-w-2xl mx-auto">
+      <div className="mb-6 md:mb-8">
         <Link
           to="/sites"
-          className="btn-ghost btn-sm mb-4"
+          className="btn-ghost btn-sm mb-4 touch-target-sm inline-flex"
         >
           <ArrowLeft size={14} />
           Back to Sites
@@ -99,7 +99,7 @@ function NewSitePage() {
           <span className="text-xs font-mono" style={{ color: "#6366f1" }}>
             sites/new
           </span>
-          <h1 className="text-2xl font-bold mt-1" style={{ color: "#fafafa" }}>Add New Site</h1>
+          <h1 className="text-xl md:text-2xl font-bold mt-1" style={{ color: "#fafafa" }}>Add New Site</h1>
           <p className="text-sm mt-1" style={{ color: "#71717a" }}>Configure a new Webflow site to archive</p>
         </motion.div>
       </div>
@@ -136,10 +136,10 @@ function NewSitePage() {
           </div>
         </div>
 
-        <div className="card-dark p-6 space-y-4">
+        <div className="card-dark p-4 md:p-6 space-y-4">
           <h2 className="text-sm font-semibold" style={{ color: "#fafafa" }}>Crawl Settings</h2>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-medium mb-1" style={{ color: "#71717a" }}>Concurrency</label>
               <input
@@ -150,7 +150,8 @@ function NewSitePage() {
                 onChange={(e) =>
                   setFormData({ ...formData, concurrency: parseInt(e.target.value) || 5 })
                 }
-                className="input-dark"
+                className="input-dark touch-target-sm"
+                aria-label="Concurrency"
               />
               <p className="text-xs font-mono mt-1" style={{ color: "#52525b" }}>Pages to crawl in parallel</p>
             </div>
@@ -167,13 +168,14 @@ function NewSitePage() {
                     maxPages: e.target.value ? parseInt(e.target.value) : null,
                   })
                 }
-                className="input-dark"
+                className="input-dark touch-target-sm"
                 placeholder="Unlimited"
+                aria-label="Max pages"
               />
               <p className="text-xs font-mono mt-1" style={{ color: "#52525b" }}>Leave empty for unlimited</p>
             </div>
 
-            <div>
+            <div className="sm:col-span-2">
               <label className="block text-xs font-medium mb-1" style={{ color: "#71717a" }}>Max Archives to Keep</label>
               <input
                 type="number"
@@ -186,8 +188,9 @@ function NewSitePage() {
                     maxArchivesToKeep: e.target.value ? parseInt(e.target.value, 10) : null,
                   })
                 }
-                className="input-dark"
+                className="input-dark touch-target-sm sm:max-w-[50%]"
                 placeholder="Unlimited"
+                aria-label="Max archives to keep"
               />
               <p className="text-xs font-mono mt-1" style={{ color: "#52525b" }}>
                 Oldest archives are deleted after this many are kept
@@ -328,10 +331,10 @@ function NewSitePage() {
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-3">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-3">
           <Link
             to="/sites"
-            className="btn-ghost"
+            className="btn-ghost touch-target-sm justify-center"
           >
             Cancel
           </Link>
@@ -340,7 +343,7 @@ function NewSitePage() {
             disabled={createMutation.isPending}
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
-            className="btn-primary disabled:opacity-50"
+            className="btn-primary disabled:opacity-50 touch-target-sm"
           >
             <Plus size={16} />
             {createMutation.isPending ? "Creating..." : "Create Site"}

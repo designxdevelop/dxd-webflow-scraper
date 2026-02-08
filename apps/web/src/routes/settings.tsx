@@ -72,18 +72,18 @@ function SettingsPage() {
   }
 
   return (
-    <div className="p-8 max-w-3xl mx-auto">
+    <div className="p-4 md:p-8 max-w-3xl mx-auto">
       {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.3 }}
-        className="mb-8"
+        className="mb-6 md:mb-8"
       >
         <span className="text-xs font-mono" style={{ color: "#6366f1" }}>
           settings/global
         </span>
-        <h1 className="text-2xl font-bold mt-1 mb-1" style={{ color: "#fafafa" }}>
+        <h1 className="text-xl md:text-2xl font-bold mt-1 mb-1" style={{ color: "#fafafa" }}>
           Settings
         </h1>
         <p className="text-sm" style={{ color: "#71717a" }}>
@@ -116,7 +116,7 @@ function SettingsPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:gap-6">
             <div>
               <label className="block text-xs font-medium mb-1" style={{ color: "#71717a" }}>
                 Default Concurrency
@@ -132,7 +132,8 @@ function SettingsPage() {
                     defaultConcurrency: parseInt(e.target.value) || 5,
                   })
                 }
-                className="input-dark"
+                className="input-dark touch-target-sm"
+                aria-label="Default concurrency"
               />
               <p className="text-xs font-mono mt-1" style={{ color: "#52525b" }}>
                 Number of parallel requests (1-30)
@@ -150,8 +151,9 @@ function SettingsPage() {
                 onChange={(e) =>
                   setFormData({ ...formData, defaultMaxPages: e.target.value })
                 }
-                className="input-dark"
+                className="input-dark touch-target-sm"
                 placeholder="Unlimited"
+                aria-label="Default max pages"
               />
               <p className="text-xs font-mono mt-1" style={{ color: "#52525b" }}>
                 Leave empty for unlimited
@@ -219,10 +221,11 @@ function SettingsPage() {
                   globalDownloadBlacklist: defaultGlobalBlacklist,
                 })
               }
-              className="btn-ghost btn-sm"
+              className="btn-ghost btn-sm touch-target-sm"
             >
               <RotateCcw size={14} />
-              Reset to Defaults
+              <span className="hidden sm:inline">Reset to Defaults</span>
+              <span className="sm:hidden">Reset</span>
             </button>
           </div>
         </motion.div>
@@ -239,12 +242,13 @@ function SettingsPage() {
             disabled={updateMutation.isPending}
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
-            className={saved ? "btn-success disabled:opacity-50" : "btn-primary disabled:opacity-50"}
+            className={`${saved ? "btn-success" : "btn-primary"} disabled:opacity-50 touch-target-sm`}
           >
             {saved ? (
               <>
                 <Check size={16} />
-                Saved Successfully
+                <span className="hidden sm:inline">Saved Successfully</span>
+                <span className="sm:hidden">Saved</span>
               </>
             ) : (
               <>

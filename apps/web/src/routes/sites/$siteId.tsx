@@ -180,43 +180,43 @@ function SiteDetailPage() {
   }
 
   return (
-    <div className="p-8 max-w-7xl mx-auto">
-      <div className="mb-8">
+    <div className="p-4 md:p-8 max-w-7xl mx-auto">
+      <div className="mb-6 md:mb-8">
         <Link
           to="/sites"
-          className="btn-ghost btn-sm mb-4"
+          className="btn-ghost btn-sm mb-4 touch-target-sm inline-flex"
         >
           <ArrowLeft size={14} />
           Back to Sites
         </Link>
 
-        <div className="flex items-start justify-between">
-          <div>
+        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+          <div className="min-w-0 flex-1">
             <div className="flex items-center gap-3 mb-1">
               <span className="text-xs font-mono" style={{ color: "#6366f1" }}>
                 sites/{site.id.slice(0, 8)}
               </span>
             </div>
-            <h1 className="text-2xl font-bold" style={{ color: "#fafafa" }}>{site.name}</h1>
+            <h1 className="text-xl md:text-2xl font-bold truncate" style={{ color: "#fafafa" }}>{site.name}</h1>
             <a
               href={site.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-1 mt-1 text-sm font-mono transition-colors hover:opacity-80"
+              className="flex items-center gap-1 mt-1 text-sm font-mono transition-colors hover:opacity-80 truncate"
               style={{ color: "#71717a" }}
             >
-              {site.url}
-              <ExternalLink size={14} />
+              <span className="truncate">{site.url}</span>
+              <ExternalLink size={14} className="shrink-0" />
             </a>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <motion.button
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
               onClick={() => startCrawlMutation.mutate()}
               disabled={startCrawlMutation.isPending}
-              className="btn-primary disabled:opacity-50"
+              className="btn-primary disabled:opacity-50 touch-target-sm"
             >
               <Play size={16} />
               {startCrawlMutation.isPending ? "Starting..." : "Start Crawl"}
@@ -227,7 +227,8 @@ function SiteDetailPage() {
                   deleteMutation.mutate();
                 }
               }}
-              className="btn-icon-danger"
+              className="btn-icon-danger touch-target-sm"
+              aria-label="Delete site"
             >
               <Trash2 size={16} />
             </button>
@@ -235,7 +236,7 @@ function SiteDetailPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6">
         {/* Configuration */}
         <div className="lg:col-span-1 space-y-6">
           <div className="card-dark p-6">

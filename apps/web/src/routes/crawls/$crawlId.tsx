@@ -98,25 +98,25 @@ function CrawlDetailPage() {
   const allLogs = dedupeLogs([...(crawl.logs || []).reverse(), ...liveLogs]);
 
   return (
-    <div className="p-8 max-w-7xl mx-auto">
-      <div className="mb-8">
+    <div className="p-4 md:p-8 max-w-7xl mx-auto">
+      <div className="mb-6 md:mb-8">
         <Link
           to="/crawls"
-          className="btn-ghost btn-sm mb-4"
+          className="btn-ghost btn-sm mb-4 touch-target-sm inline-flex"
         >
           <ArrowLeft size={14} />
           Back to Crawls
         </Link>
 
-        <div className="flex items-start justify-between">
-          <div>
+        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+          <div className="min-w-0 flex-1">
             <div className="flex items-center gap-3 mb-1">
               <span className="text-xs font-mono" style={{ color: "#6366f1" }}>
                 crawls/{crawl.id.slice(0, 8)}
               </span>
             </div>
-            <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-bold" style={{ color: "#fafafa" }}>
+            <div className="flex flex-wrap items-center gap-2 md:gap-3">
+              <h1 className="text-xl md:text-2xl font-bold truncate" style={{ color: "#fafafa" }}>
                 {crawl.site?.name || "Unknown Site"}
               </h1>
               <StatusBadge status={crawl.status || "unknown"} />
@@ -141,20 +141,22 @@ function CrawlDetailPage() {
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             {(crawl.status === "running" || crawl.status === "pending") && (
               <button
                 onClick={() => cancelMutation.mutate()}
                 disabled={cancelMutation.isPending}
-                className="btn-danger disabled:opacity-50"
+                className="btn-danger disabled:opacity-50 touch-target-sm"
               >
                 <XCircle size={16} />
                 Cancel
               </button>
             )}
             {crawl.status === "uploading" && (
-              <span className="btn-secondary" style={{ cursor: "default", opacity: 0.8 }}>
-                Uploading{uploadProgress ? ` ${Math.round(uploadProgress.percent)}%` : "..."}
+              <span className="btn-secondary touch-target-sm" style={{ cursor: "default", opacity: 0.8 }}>
+                <span className="hidden sm:inline">Uploading</span>
+                <span className="sm:hidden">Upload</span>
+                {uploadProgress ? ` ${Math.round(uploadProgress.percent)}%` : "..."}
               </span>
             )}
             {crawl.status === "completed" &&
@@ -162,17 +164,18 @@ function CrawlDetailPage() {
               (crawl.outputSizeBytes ?? 0) > 0 && (
               <a
                 href={crawlsApi.getDownloadUrl(crawl.id)}
-                className="btn-primary"
+                className="btn-primary touch-target-sm"
               >
                 <Download size={16} />
-                Download
+                <span className="hidden sm:inline">Download</span>
+                <span className="sm:hidden">DL</span>
               </a>
             )}
           </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 md:gap-6">
         {/* Stats */}
         <div className="lg:col-span-1 space-y-4">
           <div className="card-dark p-6">

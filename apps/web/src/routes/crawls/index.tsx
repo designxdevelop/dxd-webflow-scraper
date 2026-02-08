@@ -45,20 +45,20 @@ function CrawlsPage() {
   const failedCount = crawls.filter((c) => c.status === "failed").length;
 
   return (
-    <div className="p-8 max-w-7xl mx-auto">
+    <div className="p-4 md:p-8 max-w-7xl mx-auto">
       {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.3 }}
-        className="mb-8"
+        className="mb-6 md:mb-8"
       >
-        <div className="flex items-start justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
           <div>
             <span className="text-xs font-mono" style={{ color: "#6366f1" }}>
               crawls/history
             </span>
-            <h1 className="text-2xl font-bold mt-1 mb-1" style={{ color: "#fafafa" }}>
+            <h1 className="text-xl md:text-2xl font-bold mt-1 mb-1" style={{ color: "#fafafa" }}>
               Crawls
             </h1>
             <p className="text-sm" style={{ color: "#71717a" }}>
@@ -68,9 +68,11 @@ function CrawlsPage() {
 
           <Link
             to="/sites"
-            className="btn-secondary"
+            className="btn-secondary touch-target-sm shrink-0"
+            aria-label="Start new crawl"
           >
-            Start New Crawl
+            <span className="hidden sm:inline">Start New Crawl</span>
+            <span className="sm:hidden">New Crawl</span>
             <ArrowRight size={16} />
           </Link>
         </div>
@@ -80,7 +82,7 @@ function CrawlsPage() {
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1, duration: 0.3 }}
-          className="flex gap-6 mt-4"
+          className="flex flex-wrap gap-4 mt-4"
         >
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full" style={{ backgroundColor: "#3b82f6", boxShadow: "0 0 6px #3b82f6" }} />
@@ -117,151 +119,264 @@ function CrawlsPage() {
       ) : crawls.length === 0 ? (
         <EmptyState />
       ) : (
-        <motion.div
-          variants={containerVariants}
-          initial="hidden"
-          animate="visible"
-          className="card-dark overflow-hidden"
-        >
-          <table className="table-dark">
-            <thead>
-              <tr>
-                <th>Site</th>
-                <th>Status</th>
-                <th>Progress</th>
-                <th>Started</th>
-                <th>Duration</th>
-                <th className="text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {crawls.map((crawl) => {
-                const duration = crawl.completedAt && crawl.startedAt
-                  ? formatDuration(new Date(crawl.completedAt).getTime() - new Date(crawl.startedAt).getTime())
-                  : crawl.startedAt
-                    ? formatDuration(Date.now() - new Date(crawl.startedAt).getTime())
-                    : "-";
+        <>
+          {/* Desktop: Table View */}
+          <motion.div
+            variants={containerVariants}
+            initial="hidden"
+            animate="visible"
+            className="card-dark overflow-hidden hidden md:block"
+          >
+            <table className="table-dark">
+              <thead>
+                <tr>
+                  <th>Site</th>
+                  <th>Status</th>
+                  <th>Progress</th>
+                  <th>Started</th>
+                  <th>Duration</th>
+                  <th className="text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {crawls.map((crawl) => {
+                  const duration = crawl.completedAt && crawl.startedAt
+                    ? formatDuration(new Date(crawl.completedAt).getTime() - new Date(crawl.startedAt).getTime())
+                    : crawl.startedAt
+                      ? formatDuration(Date.now() - new Date(crawl.startedAt).getTime())
+                      : "-";
 
-                const progress = crawl.totalPages
-                  ? Math.round(((crawl.succeededPages || 0) / crawl.totalPages) * 100)
-                  : 0;
+                  const progress = crawl.totalPages
+                    ? Math.round(((crawl.succeededPages || 0) / crawl.totalPages) * 100)
+                    : 0;
 
-                return (
-                  <motion.tr
-                    key={crawl.id}
-                    variants={itemVariants}
-                    className="group"
-                  >
-                    <td>
-                      <Link
-                        to="/crawls/$crawlId"
-                        params={{ crawlId: crawl.id }}
-                        className="flex flex-col"
-                      >
-                        <span className="font-medium text-sm group-hover:underline" style={{ color: "#fafafa" }}>
-                          {crawl.site?.name || "Unknown"}
-                        </span>
-                        <span className="text-xs font-mono" style={{ color: "#52525b" }}>
-                          #{crawl.id.slice(0, 8)}
-                        </span>
-                      </Link>
-                    </td>
-                    <td>
-                      <StatusBadge status={crawl.status || "unknown"} />
-                    </td>
-                    <td>
-                      <div className="flex items-center gap-3">
-                        <div className="w-20 progress-dark">
-                          <div
-                            className="progress-dark-fill"
-                            style={{
-                              width: `${progress}%`,
-                              background: crawl.status === "failed"
-                                ? "linear-gradient(90deg, #ef4444 0%, #f87171 100%)"
-                                : crawl.status === "completed"
-                                  ? "linear-gradient(90deg, #22c55e 0%, #4ade80 100%)"
-                                  : undefined,
-                            }}
-                          />
-                        </div>
-                        <span className="text-xs font-mono" style={{ color: "#71717a" }}>
-                          {crawl.succeededPages ?? 0}/{crawl.totalPages ?? "?"}
-                        </span>
-                      </div>
-                    </td>
-                    <td>
-                      <div className="flex items-center gap-2 text-sm font-mono" style={{ color: "#71717a" }}>
-                        <Clock size={14} />
-                        {crawl.startedAt ? (
-                          <span>
-                            {new Date(crawl.startedAt).toLocaleDateString("en-US", {
-                              month: "short",
-                              day: "numeric",
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                          </span>
-                        ) : (
-                          "pending"
-                        )}
-                      </div>
-                    </td>
-                    <td>
-                      <span className="text-sm font-mono" style={{ color: "#71717a" }}>
-                        {duration}
-                      </span>
-                    </td>
-                    <td>
-                      <div className="flex items-center justify-end gap-2">
+                  return (
+                    <motion.tr
+                      key={crawl.id}
+                      variants={itemVariants}
+                      className="group"
+                    >
+                      <td>
                         <Link
                           to="/crawls/$crawlId"
                           params={{ crawlId: crawl.id }}
-                          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-medium transition-colors"
-                          style={{
-                            backgroundColor: "#27272a",
-                            color: "#a1a1aa",
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.backgroundColor = "#3f3f46";
-                            e.currentTarget.style.color = "#fafafa";
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.backgroundColor = "#27272a";
-                            e.currentTarget.style.color = "#a1a1aa";
-                          }}
+                          className="flex flex-col"
                         >
-                          <Eye size={14} />
-                          View
+                          <span className="font-medium text-sm group-hover:underline" style={{ color: "#fafafa" }}>
+                            {crawl.site?.name || "Unknown"}
+                          </span>
+                          <span className="text-xs font-mono" style={{ color: "#52525b" }}>
+                            #{crawl.id.slice(0, 8)}
+                          </span>
                         </Link>
-                        {crawl.status === "completed" &&
-                          crawl.outputPath?.endsWith(".zip") &&
-                          (crawl.outputSizeBytes ?? 0) > 0 && (
-                          <a
-                            href={crawlsApi.getDownloadUrl(crawl.id)}
-                            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-medium transition-colors"
+                      </td>
+                      <td>
+                        <StatusBadge status={crawl.status || "unknown"} />
+                      </td>
+                      <td>
+                        <div className="flex items-center gap-3">
+                          <div className="w-20 progress-dark">
+                            <div
+                              className="progress-dark-fill"
+                              style={{
+                                width: `${progress}%`,
+                                background: crawl.status === "failed"
+                                  ? "linear-gradient(90deg, #ef4444 0%, #f87171 100%)"
+                                  : crawl.status === "completed"
+                                    ? "linear-gradient(90deg, #22c55e 0%, #4ade80 100%)"
+                                    : undefined,
+                              }}
+                            />
+                          </div>
+                          <span className="text-xs font-mono" style={{ color: "#71717a" }}>
+                            {crawl.succeededPages ?? 0}/{crawl.totalPages ?? "?"}
+                          </span>
+                        </div>
+                      </td>
+                      <td>
+                        <div className="flex items-center gap-2 text-sm font-mono" style={{ color: "#71717a" }}>
+                          <Clock size={14} />
+                          {crawl.startedAt ? (
+                            <span>
+                              {new Date(crawl.startedAt).toLocaleDateString("en-US", {
+                                month: "short",
+                                day: "numeric",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })}
+                            </span>
+                          ) : (
+                            "pending"
+                          )}
+                        </div>
+                      </td>
+                      <td>
+                        <span className="text-sm font-mono" style={{ color: "#71717a" }}>
+                          {duration}
+                        </span>
+                      </td>
+                      <td>
+                        <div className="flex items-center justify-end gap-2">
+                          <Link
+                            to="/crawls/$crawlId"
+                            params={{ crawlId: crawl.id }}
+                            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-medium transition-colors touch-target-sm"
                             style={{
-                              backgroundColor: "rgba(99, 102, 241, 0.1)",
-                              color: "#818cf8",
+                              backgroundColor: "#27272a",
+                              color: "#a1a1aa",
                             }}
                             onMouseEnter={(e) => {
-                              e.currentTarget.style.backgroundColor = "rgba(99, 102, 241, 0.2)";
+                              e.currentTarget.style.backgroundColor = "#3f3f46";
+                              e.currentTarget.style.color = "#fafafa";
                             }}
                             onMouseLeave={(e) => {
-                              e.currentTarget.style.backgroundColor = "rgba(99, 102, 241, 0.1)";
+                              e.currentTarget.style.backgroundColor = "#27272a";
+                              e.currentTarget.style.color = "#a1a1aa";
                             }}
                           >
-                            <Download size={14} />
-                            Download
-                          </a>
-                        )}
-                      </div>
-                    </td>
-                  </motion.tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </motion.div>
+                            <Eye size={14} />
+                            View
+                          </Link>
+                          {crawl.status === "completed" &&
+                            crawl.outputPath?.endsWith(".zip") &&
+                            (crawl.outputSizeBytes ?? 0) > 0 && (
+                            <a
+                              href={crawlsApi.getDownloadUrl(crawl.id)}
+                              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-medium transition-colors touch-target-sm"
+                              style={{
+                                backgroundColor: "rgba(99, 102, 241, 0.1)",
+                                color: "#818cf8",
+                              }}
+                              onMouseEnter={(e) => {
+                                e.currentTarget.style.backgroundColor = "rgba(99, 102, 241, 0.2)";
+                              }}
+                              onMouseLeave={(e) => {
+                                e.currentTarget.style.backgroundColor = "rgba(99, 102, 241, 0.1)";
+                              }}
+                            >
+                              <Download size={14} />
+                              Download
+                            </a>
+                          )}
+                        </div>
+                      </td>
+                    </motion.tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </motion.div>
+
+          {/* Mobile: Card View */}
+          <motion.div
+            variants={containerVariants}
+            initial="hidden"
+            animate="visible"
+            className="md:hidden space-y-3"
+          >
+            {crawls.map((crawl) => {
+              const duration = crawl.completedAt && crawl.startedAt
+                ? formatDuration(new Date(crawl.completedAt).getTime() - new Date(crawl.startedAt).getTime())
+                : crawl.startedAt
+                  ? formatDuration(Date.now() - new Date(crawl.startedAt).getTime())
+                  : "-";
+
+              const progress = crawl.totalPages
+                ? Math.round(((crawl.succeededPages || 0) / crawl.totalPages) * 100)
+                : 0;
+
+              return (
+                <motion.div
+                  key={crawl.id}
+                  variants={itemVariants}
+                  className="card-dark p-4"
+                >
+                  <div className="flex items-start justify-between mb-3">
+                    <Link
+                      to="/crawls/$crawlId"
+                      params={{ crawlId: crawl.id }}
+                      className="min-w-0 flex-1"
+                    >
+                      <p className="font-medium text-sm truncate" style={{ color: "#fafafa" }}>
+                        {crawl.site?.name || "Unknown"}
+                      </p>
+                      <p className="text-xs font-mono" style={{ color: "#52525b" }}>
+                        #{crawl.id.slice(0, 8)}
+                      </p>
+                    </Link>
+                    <StatusBadge status={crawl.status || "unknown"} />
+                  </div>
+                  
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="flex-1 progress-dark">
+                      <div
+                        className="progress-dark-fill"
+                        style={{
+                          width: `${progress}%`,
+                          background: crawl.status === "failed"
+                            ? "linear-gradient(90deg, #ef4444 0%, #f87171 100%)"
+                            : crawl.status === "completed"
+                              ? "linear-gradient(90deg, #22c55e 0%, #4ade80 100%)"
+                              : undefined,
+                        }}
+                      />
+                    </div>
+                    <span className="text-xs font-mono shrink-0" style={{ color: "#71717a" }}>
+                      {crawl.succeededPages ?? 0}/{crawl.totalPages ?? "?"}
+                    </span>
+                  </div>
+                  
+                  <div className="flex items-center justify-between text-xs font-mono mb-3" style={{ color: "#71717a" }}>
+                    <div className="flex items-center gap-2">
+                      <Clock size={12} />
+                      {crawl.startedAt ? (
+                        <span>
+                          {new Date(crawl.startedAt).toLocaleDateString("en-US", {
+                            month: "short",
+                            day: "numeric",
+                          })}
+                        </span>
+                      ) : (
+                        "pending"
+                      )}
+                    </div>
+                    <span>{duration}</span>
+                  </div>
+                  
+                  <div className="flex items-center justify-end gap-2 pt-3 border-t" style={{ borderColor: "#27272a" }}>
+                    <Link
+                      to="/crawls/$crawlId"
+                      params={{ crawlId: crawl.id }}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded text-xs font-medium touch-target-sm"
+                      style={{
+                        backgroundColor: "#27272a",
+                        color: "#a1a1aa",
+                      }}
+                    >
+                      <Eye size={14} />
+                      View
+                    </Link>
+                    {crawl.status === "completed" &&
+                      crawl.outputPath?.endsWith(".zip") &&
+                      (crawl.outputSizeBytes ?? 0) > 0 && (
+                      <a
+                        href={crawlsApi.getDownloadUrl(crawl.id)}
+                        className="flex items-center gap-1.5 px-3 py-2 rounded text-xs font-medium touch-target-sm"
+                        style={{
+                          backgroundColor: "rgba(99, 102, 241, 0.1)",
+                          color: "#818cf8",
+                        }}
+                      >
+                        <Download size={14} />
+                        Download
+                      </a>
+                    )}
+                  </div>
+                </motion.div>
+              );
+            })}
+          </motion.div>
+        </>
       )}
     </div>
   );

@@ -249,8 +249,23 @@ app.post("/:id/crawl", async (c) => {
     })
     .returning();
 
-  // Queue the job via abstracted client (BullMQ on Node, HTTP on Workers)
-  await queue.addCrawlJob(siteId, crawl.id);
+  // Queue the job via abstracted client (BullMQ on Node, HTTP on Workers).
+  // If enqueue fails, do not leave the crawl stuck as pending with no queue job.
+  try {
+    await queue.addCrawlJob(siteId, crawl.id);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown queue error";
+    await db
+      .update(crawls)
+      .set({
+        status: "failed",
+        completedAt: new Date(),
+        errorMessage: `Failed to enqueue crawl job: ${message}`,
+      })
+      .where(eq(crawls.id, crawl.id));
+
+    return c.json({ error: "Failed to queue crawl job" }, 503);
+  }
 
   return c.json({ crawl }, 201);
 });

@@ -98,9 +98,32 @@ export function getAuthConfigFactory(db: Database, options: AuthConfigOptions) {
       },
       cookies: isProduction
         ? {
-            sessionToken: { options: { sameSite: "none", secure: true } },
-            callbackUrl: { options: { sameSite: "none", secure: true } },
-            csrfToken: { options: { sameSite: "none", secure: true } },
+            sessionToken: {
+              name: "next-auth.session-token",
+              options: {
+                httpOnly: true,
+                sameSite: "none",
+                secure: true,
+                domain: ".designxdevelop.com",
+              },
+            },
+            callbackUrl: {
+              name: "next-auth.callback-url",
+              options: {
+                sameSite: "none",
+                secure: true,
+                domain: ".designxdevelop.com",
+              },
+            },
+            csrfToken: {
+              name: "next-auth.csrf-token",
+              options: {
+                httpOnly: true,
+                sameSite: "none",
+                secure: true,
+                domain: ".designxdevelop.com",
+              },
+            },
           }
         : undefined,
       trustHost: true,

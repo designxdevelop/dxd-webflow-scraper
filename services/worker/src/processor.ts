@@ -497,6 +497,16 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
         level: "error",
         message: missingMsg,
       });
+    } else {
+      // Fresh crawl start - no state file and not a retry
+      const freshStartMsg = `Starting fresh crawl - no previous state found at ${stateFile}`;
+      console.log(`[Worker] ${freshStartMsg} for crawl ${crawlId}`);
+      await publishEvent(crawlId, {
+        type: "log",
+        level: "info",
+        message: freshStartMsg,
+        timestamp: new Date().toISOString(),
+      });
     }
   } catch (error) {
     const readErrorMsg = `Failed to read state file: ${(error as Error).message}. Starting fresh.`;
@@ -770,8 +780,27 @@ async function reconcileOrphanedCrawls(): Promise<void> {
       : 0;
 
     if (!queueJob) {
-      if (crawl.status === "pending" && crawl.siteId) {
+      // Re-enqueue any active crawl (pending, running, uploading) that's missing its queue job
+      // This allows crawls to resume from saved state instead of being marked as failed
+      const activeStatuses = new Set(["pending", "running", "uploading"]);
+      if (crawl.status && activeStatuses.has(crawl.status) && crawl.siteId) {
         try {
+          // Check if state file exists to report progress that will be resumed
+          const tempDir = await storage.createTempDir(crawl.id);
+          const stateFile = `${tempDir}/.crawl-state.json`;
+          let stateInfo = "";
+          try {
+            const stateData = await fs.readFile(stateFile, "utf-8");
+            const state = JSON.parse(stateData);
+            if (state && Array.isArray(state.succeeded) && Array.isArray(state.failed)) {
+              const totalProgress = state.succeeded.length + state.failed.length;
+              stateInfo = ` (${state.succeeded.length} succeeded, ${state.failed.length} failed = ${totalProgress} total URLs will be skipped)`;
+            }
+          } catch {
+            // State file doesn't exist or is invalid - crawl will start fresh
+            stateInfo = " (no state file found - crawl will restart from beginning)";
+          }
+
           await crawlQueue.add(
             "crawl",
             {
@@ -784,13 +813,13 @@ async function reconcileOrphanedCrawls(): Promise<void> {
               attempts: 1,
             }
           );
-          const requeueMsg = `RE-ENQUEUED orphaned pending crawl (age: ${ageMinutes}min, status: ${crawl.status})`;
+          const requeueMsg = `RE-ENQUEUED orphaned ${crawl.status} crawl (age: ${ageMinutes}min, reason: worker crash/restart)${stateInfo}`;
           console.warn(`[Worker] ${requeueMsg}: ${crawl.id}`);
           // Publish event so UI shows this happened
           await publishEvent(crawl.id, {
             type: "log",
             level: "warn",
-            message: `Orphan reconciliation: ${requeueMsg}. This may indicate a previous worker crash or restart.`,
+            message: `Orphan reconciliation: ${requeueMsg}`,
             timestamp: new Date().toISOString(),
           });
           await db.insert(crawlLogs).values({

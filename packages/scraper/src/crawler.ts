@@ -481,8 +481,10 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
                 }
 
                 if (position % 25 === 0 || position === pages.length) {
+                  const inFlight = position - succeededCount - failedCount;
+                  const inFlightMsg = inFlight > 0 ? `, ${inFlight} in progress` : "";
                   log.info(
-                    `Progress: ${position}/${urlQueue.length} processed (${succeededCount} succeeded, ${failedCount} failed)`
+                    `Progress: ${position}/${urlQueue.length} processed (${succeededCount} succeeded, ${failedCount} failed${inFlightMsg})`
                   );
                 } else {
                   log.debug(`Archived ${url} -> ${relativePath}`, url);

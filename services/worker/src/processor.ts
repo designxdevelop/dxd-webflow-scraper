@@ -5,8 +5,10 @@ import { crawlSite, type CrawlProgress, type LogLevel } from "@dxd/scraper";
 import { getStorage } from "@dxd/storage";
 import { db, sites, crawls, crawlLogs, settings } from "./db.js";
 import fs from "node:fs/promises";
+import nodeFs from "node:fs";
 import path from "node:path";
 import archiver from "archiver";
+import { once } from "node:events";
 import { Readable } from "node:stream";
 
 const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
@@ -183,6 +185,8 @@ async function uploadArchiveFromTempDir(
     throw new Error(`No files found to archive in ${outputDir}`);
   }
 
+  const localArchivePath = path.join(outputDir, "__archive__.zip");
+
   await publishEvent(crawlId, {
     type: "progress",
     phase: "uploading",
@@ -197,6 +201,8 @@ async function uploadArchiveFromTempDir(
   });
 
   const archive = archiver("zip", { zlib: { level: 9 } });
+  const archiveOutput = nodeFs.createWriteStream(localArchivePath);
+  archive.pipe(archiveOutput);
   archive.on("warning", (error: Error) => {
     console.warn("[Worker] Archive warning", {
       crawlId,
@@ -212,12 +218,6 @@ async function uploadArchiveFromTempDir(
     });
   });
 
-  const archiveStream = Readable.toWeb(archive) as unknown as ReadableStream<Uint8Array>;
-  let writeError: unknown;
-  const writePromise = storage.writeStream(archivePath, archiveStream).catch((error) => {
-    writeError = error;
-  });
-
   try {
     for (const file of files) {
       const relativePath = path.relative(outputDir, file).replace(/\\/g, "/");
@@ -225,10 +225,13 @@ async function uploadArchiveFromTempDir(
     }
 
     await archive.finalize();
-    await writePromise;
-    if (writeError) {
-      throw writeError;
-    }
+    await once(archiveOutput, "close");
+
+    const archiveReadStream = nodeFs.createReadStream(localArchivePath);
+    await storage.writeStream(
+      archivePath,
+      Readable.toWeb(archiveReadStream) as unknown as ReadableStream<Uint8Array>
+    );
 
     const outputSize = await storage.getSize(archivePath);
     await publishEvent(crawlId, {
@@ -249,6 +252,8 @@ async function uploadArchiveFromTempDir(
     await storage.deleteDir(archivePath).catch(() => undefined);
     archive.destroy(error as Error);
     throw error;
+  } finally {
+    await fs.rm(localArchivePath, { force: true }).catch(() => undefined);
   }
 }
 

@@ -233,7 +233,9 @@ function CrawlsPage() {
                           <Eye size={14} />
                           View
                         </Link>
-                        {crawl.status === "completed" && (
+                        {crawl.status === "completed" &&
+                          crawl.outputPath?.endsWith(".zip") &&
+                          (crawl.outputSizeBytes ?? 0) > 0 && (
                           <a
                             href={crawlsApi.getDownloadUrl(crawl.id)}
                             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-medium transition-colors"

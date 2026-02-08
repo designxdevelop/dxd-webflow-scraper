@@ -157,7 +157,9 @@ function CrawlDetailPage() {
                 Uploading{uploadProgress ? ` ${Math.round(uploadProgress.percent)}%` : "..."}
               </span>
             )}
-            {crawl.status === "completed" && crawl.outputPath && (
+            {crawl.status === "completed" &&
+              crawl.outputPath?.endsWith(".zip") &&
+              (crawl.outputSizeBytes ?? 0) > 0 && (
               <a
                 href={crawlsApi.getDownloadUrl(crawl.id)}
                 className="btn-primary"

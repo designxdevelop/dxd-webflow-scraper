@@ -84,7 +84,7 @@ function RootLayout() {
           <Link to="/" className="flex items-center gap-3 group">
             <motion.div 
               whileHover={{ scale: 1.05 }}
-              className="relative h-10 w-16 rounded-lg border flex items-center justify-center overflow-hidden"
+              className="relative h-10 w-10 rounded-lg border flex items-center justify-center overflow-hidden"
               style={{
                 borderColor: "#27272a",
                 background:
@@ -107,7 +107,7 @@ function RootLayout() {
             </motion.div>
             <div>
               <h1 className="text-base font-semibold tracking-tight leading-tight" style={{ color: "#fafafa" }}>
-                DXD WF Archiver
+                WF Scraper
               </h1>
             </div>
           </Link>

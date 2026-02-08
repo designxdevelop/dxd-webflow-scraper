@@ -560,7 +560,9 @@ function SiteDetailPage() {
                         {crawl.failedPages ? ` (${crawl.failedPages} failed)` : ""}
                       </p>
                     </div>
-                    {crawl.status === "completed" && (
+                    {crawl.status === "completed" &&
+                      crawl.outputPath?.endsWith(".zip") &&
+                      (crawl.outputSizeBytes ?? 0) > 0 && (
                       <div className="flex items-center gap-2">
                         <a
                           href={crawlsApi.getDownloadUrl(crawl.id)}

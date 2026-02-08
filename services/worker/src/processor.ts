@@ -719,36 +719,6 @@ async function reconcileOrphanedCrawls(): Promise<void> {
       continue;
     }
 
-    if (crawl.status === "pending" && crawl.siteId) {
-      try {
-        await queueJob.remove();
-      } catch {
-        // Ignore if already gone.
-      }
-
-      try {
-        await crawlQueue.add(
-          "crawl",
-          {
-            siteId: crawl.siteId,
-            crawlId: crawl.id,
-          },
-          {
-            jobId: crawl.id,
-          }
-        );
-        console.warn(
-          `[Worker] Re-enqueued pending crawl ${crawl.id} from terminal queue state ${state}`
-        );
-        continue;
-      } catch (error) {
-        console.error(
-          `[Worker] Failed to re-enqueue pending crawl ${crawl.id} from state ${state}`,
-          error
-        );
-      }
-    }
-
     await db
       .update(crawls)
       .set({

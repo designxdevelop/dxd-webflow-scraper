@@ -185,10 +185,6 @@ export const crawlsApi = {
     return `${API_URL}/api/crawls/${id}/download`;
   },
 
-  getPreviewUrl: (id: string): string => {
-    return `${API_URL}/preview/${id}/`;
-  },
-
   getDownloadSuggestions: async (
     id: string,
     params?: { minCount?: number; limit?: number }

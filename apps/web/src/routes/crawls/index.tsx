@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { crawlsApi } from "@/lib/api";
-import { History, ArrowRight, ExternalLink, Download, Eye, Clock } from "lucide-react";
+import { History, ArrowRight, Download, Eye, Clock } from "lucide-react";
 
 export const Route = createFileRoute("/crawls/")({
   component: CrawlsPage,
@@ -234,44 +234,23 @@ function CrawlsPage() {
                           View
                         </Link>
                         {crawl.status === "completed" && (
-                          <>
-                            <a
-                              href={crawlsApi.getPreviewUrl(crawl.id)}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-medium transition-colors"
-                              style={{
-                                backgroundColor: "rgba(34, 197, 94, 0.1)",
-                                color: "#22c55e",
-                              }}
-                              onMouseEnter={(e) => {
-                                e.currentTarget.style.backgroundColor = "rgba(34, 197, 94, 0.2)";
-                              }}
-                              onMouseLeave={(e) => {
-                                e.currentTarget.style.backgroundColor = "rgba(34, 197, 94, 0.1)";
-                              }}
-                            >
-                              <ExternalLink size={14} />
-                              Preview
-                            </a>
-                            <a
-                              href={crawlsApi.getDownloadUrl(crawl.id)}
-                              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-medium transition-colors"
-                              style={{
-                                backgroundColor: "rgba(99, 102, 241, 0.1)",
-                                color: "#818cf8",
-                              }}
-                              onMouseEnter={(e) => {
-                                e.currentTarget.style.backgroundColor = "rgba(99, 102, 241, 0.2)";
-                              }}
-                              onMouseLeave={(e) => {
-                                e.currentTarget.style.backgroundColor = "rgba(99, 102, 241, 0.1)";
-                              }}
-                            >
-                              <Download size={14} />
-                              Download
-                            </a>
-                          </>
+                          <a
+                            href={crawlsApi.getDownloadUrl(crawl.id)}
+                            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-medium transition-colors"
+                            style={{
+                              backgroundColor: "rgba(99, 102, 241, 0.1)",
+                              color: "#818cf8",
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.backgroundColor = "rgba(99, 102, 241, 0.2)";
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.backgroundColor = "rgba(99, 102, 241, 0.1)";
+                            }}
+                          >
+                            <Download size={14} />
+                            Download
+                          </a>
                         )}
                       </div>
                     </td>

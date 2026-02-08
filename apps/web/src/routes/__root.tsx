@@ -84,18 +84,31 @@ function RootLayout() {
           <Link to="/" className="flex items-center gap-3 group">
             <motion.div 
               whileHover={{ scale: 1.05 }}
-              className="p-2 rounded-lg"
-              style={{ background: "linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)" }}
+              className="relative h-10 w-16 rounded-lg border flex items-center justify-center overflow-hidden"
+              style={{
+                borderColor: "#27272a",
+                background:
+                  "radial-gradient(circle at 15% 20%, rgba(34,211,238,0.22), transparent 45%), radial-gradient(circle at 85% 20%, rgba(244,114,182,0.22), transparent 45%), #09090b",
+              }}
             >
-              <Box size={20} style={{ color: "white" }} />
+              <span
+                className="relative text-sm font-semibold tracking-[0.24em]"
+                style={{
+                  fontFamily: "JetBrains Mono, monospace",
+                  background:
+                    "linear-gradient(90deg, #22d3ee 0%, #93c5fd 38%, #c4b5fd 55%, #f472b6 78%, #fb7185 100%)",
+                  WebkitBackgroundClip: "text",
+                  color: "transparent",
+                  textShadow: "0 0 16px rgba(34,211,238,0.25), 0 0 16px rgba(244,114,182,0.25)",
+                }}
+              >
+                DXD
+              </span>
             </motion.div>
             <div>
-              <h1 className="text-lg font-bold tracking-tight" style={{ color: "#fafafa" }}>
-                Scraper
+              <h1 className="text-base font-semibold tracking-tight leading-tight" style={{ color: "#fafafa" }}>
+                DXD WF Archiver
               </h1>
-              <p className="text-xs font-mono" style={{ color: "#71717a" }}>
-                v1.0.0
-              </p>
             </div>
           </Link>
         </div>

@@ -11,7 +11,10 @@ import {
   ListObjectsV2Command,
   DeleteObjectsCommand,
   HeadObjectCommand,
-  CopyObjectCommand,
+  CreateMultipartUploadCommand,
+  UploadPartCommand,
+  CompleteMultipartUploadCommand,
+  AbortMultipartUploadCommand,
 } from "@aws-sdk/client-s3";
 import type { MoveToFinalOptions, StorageAdapter } from "./adapter.js";
 
@@ -25,9 +28,21 @@ type S3Config = {
   forcePathStyle?: boolean;
 };
 
+const MEBIBYTE = 1024 * 1024;
+const MIN_MULTIPART_PART_SIZE_BYTES = 5 * MEBIBYTE;
+const MAX_MULTIPART_PARTS = 10_000;
+const DEFAULT_BUFFER_FALLBACK_MAX_BYTES = 256 * MEBIBYTE;
+const DEFAULT_MULTIPART_PART_SIZE_BYTES = 16 * MEBIBYTE;
+const DEFAULT_UPLOAD_PART_ATTEMPTS = 4;
+const DEFAULT_UPLOAD_RETRY_BASE_DELAY_MS = 300;
+
 export class S3Storage implements StorageAdapter {
   private client: S3Client;
   private tempRoot: string;
+  private bufferFallbackMaxBytes: number;
+  private multipartPartSizeBytes: number;
+  private uploadPartAttempts: number;
+  private uploadRetryBaseDelayMs: number;
 
   constructor(private config: S3Config) {
     this.client = new S3Client({
@@ -44,19 +59,46 @@ export class S3Storage implements StorageAdapter {
       },
     });
     this.tempRoot = process.env.LOCAL_TEMP_PATH || "/tmp/dxd-archiver";
+    this.bufferFallbackMaxBytes = readPositiveIntEnv(
+      "S3_BUFFER_FALLBACK_MAX_BYTES",
+      DEFAULT_BUFFER_FALLBACK_MAX_BYTES
+    );
+    this.multipartPartSizeBytes = Math.max(
+      MIN_MULTIPART_PART_SIZE_BYTES,
+      readPositiveIntEnv("S3_MULTIPART_PART_SIZE_BYTES", DEFAULT_MULTIPART_PART_SIZE_BYTES)
+    );
+    this.uploadPartAttempts = readPositiveIntEnv("S3_UPLOAD_PART_ATTEMPTS", DEFAULT_UPLOAD_PART_ATTEMPTS);
+    this.uploadRetryBaseDelayMs = readPositiveIntEnv(
+      "S3_UPLOAD_RETRY_BASE_DELAY_MS",
+      DEFAULT_UPLOAD_RETRY_BASE_DELAY_MS
+    );
   }
 
   async writeFile(filePath: string, content: Buffer | string): Promise<void> {
     const body = typeof content === "string" ? Buffer.from(content) : content;
-    await this.sendWithDiagnostics("PutObject", () =>
-      this.client.send(
-        new PutObjectCommand({
-          Bucket: this.config.bucket,
-          Key: filePath,
-          Body: body,
-        })
-      )
-    );
+    if (body.length === 0) {
+      await this.sendWithDiagnostics("PutObject", () =>
+        this.client.send(
+          new PutObjectCommand({
+            Bucket: this.config.bucket,
+            Key: filePath,
+            Body: body,
+          })
+        )
+      );
+      return;
+    }
+
+    const uploadTempDir = path.join(this.tempRoot, ".stream-uploads");
+    await fsp.mkdir(uploadTempDir, { recursive: true });
+
+    const tempFilePath = path.join(uploadTempDir, `${randomUUID()}.upload`);
+    try {
+      await fsp.writeFile(tempFilePath, body);
+      await this.putObjectWithFallback(filePath, tempFilePath, body.length);
+    } finally {
+      await fsp.unlink(tempFilePath).catch(() => undefined);
+    }
   }
 
   async writeStream(filePath: string, stream: ReadableStream<Uint8Array>): Promise<void> {
@@ -263,34 +305,162 @@ export class S3Storage implements StorageAdapter {
 
   private async putObjectWithFallback(key: string, localFilePath: string, size: number): Promise<void> {
     try {
-      await this.sendWithDiagnostics("PutObject", () =>
+      if (size === 0) {
+        await this.putObjectFromBuffer(key, localFilePath);
+        return;
+      }
+
+      // Use multipart for all non-empty files to keep uploads retryable per-part.
+      await this.putObjectMultipart(key, localFilePath, size);
+    } catch (error) {
+      if (
+        (isChecksumMismatchError(error) || isSignatureMismatchError(error) || isRetryableUploadError(error)) &&
+        size <= this.bufferFallbackMaxBytes
+      ) {
+        await this.putObjectFromBuffer(key, localFilePath);
+        return;
+      }
+      throw error;
+    }
+  }
+
+  private async putObjectFromBuffer(key: string, localFilePath: string): Promise<void> {
+    const buffer = await fsp.readFile(localFilePath);
+    await this.sendWithDiagnostics("PutObject", () =>
+      this.client.send(
+        new PutObjectCommand({
+          Bucket: this.config.bucket,
+          Key: key,
+          Body: buffer,
+          ContentLength: buffer.length,
+        })
+      )
+    );
+  }
+
+  private async putObjectMultipart(key: string, localFilePath: string, size: number): Promise<void> {
+    const partSize = resolveMultipartPartSize(size, this.multipartPartSizeBytes);
+    let uploadId: string | undefined;
+    let fileHandle: fsp.FileHandle | undefined;
+    const completedParts: Array<{ ETag: string; PartNumber: number }> = [];
+
+    try {
+      const created = await this.sendWithDiagnostics("CreateMultipartUpload", () =>
         this.client.send(
-          new PutObjectCommand({
+          new CreateMultipartUploadCommand({
             Bucket: this.config.bucket,
             Key: key,
-            Body: fs.createReadStream(localFilePath),
-            ContentLength: size,
+          })
+        )
+      );
+
+      uploadId = created.UploadId;
+      if (!uploadId) {
+        throw new Error(`CreateMultipartUpload did not return UploadId for ${key}`);
+      }
+
+      fileHandle = await fsp.open(localFilePath, "r");
+      let offset = 0;
+      let partNumber = 1;
+
+      while (offset < size) {
+        const bytesToRead = Math.min(partSize, size - offset);
+        const chunk = await readChunk(fileHandle, offset, bytesToRead);
+        if (chunk.length === 0) {
+          break;
+        }
+
+        const etag = await this.uploadMultipartPartWithRetry({
+          key,
+          uploadId,
+          partNumber,
+          chunk,
+        });
+
+        completedParts.push({
+          ETag: etag,
+          PartNumber: partNumber,
+        });
+        offset += chunk.length;
+        partNumber += 1;
+      }
+
+      if (offset !== size) {
+        throw new Error(`Multipart upload read ${offset} bytes but expected ${size} bytes for ${key}`);
+      }
+
+      await this.sendWithDiagnostics("CompleteMultipartUpload", () =>
+        this.client.send(
+          new CompleteMultipartUploadCommand({
+            Bucket: this.config.bucket,
+            Key: key,
+            UploadId: uploadId,
+            MultipartUpload: {
+              Parts: completedParts,
+            },
           })
         )
       );
     } catch (error) {
-      if (!isChecksumMismatchError(error) && !isSignatureMismatchError(error)) {
-        throw error;
+      if (uploadId) {
+        await this.sendWithDiagnostics("AbortMultipartUpload", () =>
+          this.client.send(
+            new AbortMultipartUploadCommand({
+              Bucket: this.config.bucket,
+              Key: key,
+              UploadId: uploadId,
+            })
+          )
+        ).catch(() => undefined);
       }
-
-      // Fallback: upload from an in-memory buffer to avoid stream signing/checksum edge cases.
-      const buffer = await fsp.readFile(localFilePath);
-      await this.sendWithDiagnostics("PutObject", () =>
-        this.client.send(
-          new PutObjectCommand({
-            Bucket: this.config.bucket,
-            Key: key,
-            Body: buffer,
-            ContentLength: buffer.length,
-          })
-        )
-      );
+      throw error;
+    } finally {
+      await fileHandle?.close().catch(() => undefined);
     }
+  }
+
+  private async uploadMultipartPartWithRetry(params: {
+    key: string;
+    uploadId: string;
+    partNumber: number;
+    chunk: Buffer;
+  }): Promise<string> {
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= this.uploadPartAttempts; attempt++) {
+      try {
+        const uploaded = await this.sendWithDiagnostics("UploadPart", () =>
+          this.client.send(
+            new UploadPartCommand({
+              Bucket: this.config.bucket,
+              Key: params.key,
+              UploadId: params.uploadId,
+              PartNumber: params.partNumber,
+              Body: params.chunk,
+              ContentLength: params.chunk.length,
+            })
+          )
+        );
+
+        if (!uploaded.ETag) {
+          throw new Error(`UploadPart returned no ETag for ${params.key} part ${params.partNumber}`);
+        }
+
+        return uploaded.ETag;
+      } catch (error) {
+        lastError = error;
+        if (!isRetryableUploadError(error) || attempt >= this.uploadPartAttempts) {
+          break;
+        }
+
+        const delayMs = this.uploadRetryBaseDelayMs * Math.pow(2, attempt - 1);
+        await wait(delayMs);
+      }
+    }
+
+    throw lastError instanceof Error
+      ? lastError
+      : new Error(`UploadPart failed for ${params.key} part ${params.partNumber}`);
   }
 
   private async sendWithDiagnostics<T>(operation: string, request: () => Promise<T>): Promise<T> {
@@ -334,6 +504,24 @@ async function streamToBuffer(stream: Readable): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
+function resolveMultipartPartSize(totalBytes: number, preferredPartSize: number): number {
+  const minRequiredPartSize = Math.ceil(totalBytes / MAX_MULTIPART_PARTS);
+  return Math.max(MIN_MULTIPART_PART_SIZE_BYTES, preferredPartSize, minRequiredPartSize);
+}
+
+async function readChunk(
+  fileHandle: fsp.FileHandle,
+  offset: number,
+  bytesToRead: number
+): Promise<Buffer> {
+  const buffer = Buffer.allocUnsafe(bytesToRead);
+  const { bytesRead } = await fileHandle.read(buffer, 0, bytesToRead, offset);
+  if (bytesRead <= 0) {
+    return Buffer.alloc(0);
+  }
+  return bytesRead === bytesToRead ? buffer : buffer.subarray(0, bytesRead);
+}
+
 function isMissingObjectError(error: unknown): boolean {
   if (!error || typeof error !== "object") {
     return false;
@@ -370,6 +558,60 @@ function isSignatureMismatchError(error: unknown): boolean {
   const code = maybeError.Code || maybeError.name || "";
   const message = maybeError.message || "";
   return code === "SignatureDoesNotMatch" || /signature.*does not match/i.test(message);
+}
+
+function isRetryableUploadError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const maybeError = error as {
+    name?: string;
+    Code?: string;
+    message?: string;
+    $retryable?: unknown;
+    $metadata?: { httpStatusCode?: number };
+  };
+
+  if (maybeError.$retryable) {
+    return true;
+  }
+
+  const statusCode = maybeError.$metadata?.httpStatusCode;
+  if (typeof statusCode === "number" && (statusCode === 408 || statusCode === 429 || statusCode >= 500)) {
+    return true;
+  }
+
+  const code = (maybeError.Code || maybeError.name || "").toLowerCase();
+  const message = (maybeError.message || "").toLowerCase();
+
+  return (
+    code.includes("timeout") ||
+    code.includes("throttl") ||
+    code.includes("slowdown") ||
+    code.includes("internalerror") ||
+    message.includes("socket hang up") ||
+    message.includes("econnreset") ||
+    message.includes("etimedout") ||
+    message.includes("network error")
+  );
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref();
+  });
+}
+
+function readPositiveIntEnv(name: string, fallback: number): number {
+  const value = process.env[name];
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 type DeserializationContext = {

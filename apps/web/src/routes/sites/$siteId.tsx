@@ -2,7 +2,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { sitesApi, crawlsApi } from "@/lib/api";
-import { ArrowLeft, Play, ExternalLink, Trash2, Download, Eye, Save } from "lucide-react";
+import { ArrowLeft, Play, ExternalLink, Trash2, Download, Save } from "lucide-react";
 import { useEffect, useState } from "react";
 
 type ScheduleFrequency = "daily" | "weekly";
@@ -562,16 +562,6 @@ function SiteDetailPage() {
                     </div>
                     {crawl.status === "completed" && (
                       <div className="flex items-center gap-2">
-                        <a
-                          href={crawlsApi.getPreviewUrl(crawl.id)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="btn-ghost btn-sm"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <Eye size={14} />
-                          Preview
-                        </a>
                         <a
                           href={crawlsApi.getDownloadUrl(crawl.id)}
                           className="btn-secondary btn-sm"

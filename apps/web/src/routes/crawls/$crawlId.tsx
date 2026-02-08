@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { crawlsApi } from "@/lib/api";
 import { useCrawlLogs } from "@/lib/hooks/useCrawlLogs";
-import { ArrowLeft, Download, ExternalLink, XCircle, Wifi, WifiOff, Ban } from "lucide-react";
+import { ArrowLeft, Download, XCircle, Wifi, WifiOff, Ban } from "lucide-react";
 import { useEffect, useRef } from "react";
 
 export const Route = createFileRoute("/crawls/$crawlId")({
@@ -158,24 +158,13 @@ function CrawlDetailPage() {
               </span>
             )}
             {crawl.status === "completed" && crawl.outputPath && (
-              <>
-                <a
-                  href={crawlsApi.getPreviewUrl(crawl.id)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="btn-secondary"
-                >
-                  <ExternalLink size={16} />
-                  Preview
-                </a>
-                <a
-                  href={crawlsApi.getDownloadUrl(crawl.id)}
-                  className="btn-primary"
-                >
-                  <Download size={16} />
-                  Download
-                </a>
-              </>
+              <a
+                href={crawlsApi.getDownloadUrl(crawl.id)}
+                className="btn-primary"
+              >
+                <Download size={16} />
+                Download
+              </a>
             )}
           </div>
         </div>

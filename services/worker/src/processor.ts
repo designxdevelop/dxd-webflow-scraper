@@ -5,9 +5,9 @@ import { crawlSite, type CrawlProgress, type LogLevel } from "@dxd/scraper";
 import { getStorage } from "@dxd/storage";
 import { db, sites, crawls, crawlLogs, settings } from "./db.js";
 import fs from "node:fs/promises";
+import path from "node:path";
 import archiver from "archiver";
 import { Readable } from "node:stream";
-import type { MoveToFinalProgress } from "@dxd/storage/adapter";
 
 const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
 const storage = getStorage();
@@ -55,7 +55,11 @@ class CrawlTimeoutError extends Error {
   }
 }
 
-function getArchivePath(outputPath: string): string {
+function getArchivePath(crawlId: string): string {
+  return `archives/${crawlId}.zip`;
+}
+
+function getLegacyArchivePath(outputPath: string): string {
   return `${outputPath}.zip`;
 }
 
@@ -87,59 +91,6 @@ async function withTimeout<T>(operation: Promise<T>, timeoutMs: number, label: s
       timer.unref();
     }),
   ]);
-}
-
-async function createPrebuiltArchive(crawlId: string, outputPath: string): Promise<string> {
-  const archivePath = getArchivePath(outputPath);
-  const outputPrefix = `${outputPath}/`;
-  const files = (await storage.listFiles(outputPath)).filter((file) => file.startsWith(outputPrefix));
-
-  if (files.length === 0) {
-    throw new Error(`No files found to archive for crawl ${crawlId}`);
-  }
-
-  const archive = archiver("zip", { zlib: { level: 9 } });
-
-  archive.on("warning", (error: Error) => {
-    console.warn("[Worker] Archive warning", {
-      crawlId,
-      outputPath,
-      error: error.message,
-    });
-  });
-
-  archive.on("error", (error: Error) => {
-    console.error("[Worker] Archive error", {
-      crawlId,
-      outputPath,
-      error: error.message,
-    });
-  });
-
-  const archiveStream = Readable.toWeb(archive) as unknown as ReadableStream<Uint8Array>;
-  let writeError: unknown;
-  const writePromise = storage.writeStream(archivePath, archiveStream).catch((error) => {
-    writeError = error;
-  });
-
-  try {
-    for (const file of files) {
-      const relativePath = file.slice(outputPrefix.length);
-      const fileStream = storage.readStream(file);
-      archive.append(Readable.fromWeb(fileStream as any), { name: relativePath });
-    }
-
-    await archive.finalize();
-    await writePromise;
-    if (writeError) {
-      throw writeError;
-    }
-    return archivePath;
-  } catch (error) {
-    await storage.deleteDir(archivePath).catch(() => undefined);
-    archive.destroy(error as Error);
-    throw error;
-  }
 }
 
 async function publishEvent(crawlId: string, event: object) {
@@ -193,58 +144,112 @@ async function getLocalDirectorySize(dirPath: string): Promise<number> {
   return total;
 }
 
-async function moveOutputToFinal(crawlId: string, outputDir: string): Promise<{ finalPath: string; outputSize: number }> {
-  const finalPath = `archives/${crawlId}`;
-  // outputDir is a local filesystem path (e.g. /tmp/dxd-archiver/<id>),
-  // not a storage key prefix. Measure it on disk before uploading.
-  const tempSize = await getLocalDirectorySize(outputDir);
+async function walkLocalFiles(rootDir: string): Promise<string[]> {
+  const files: string[] = [];
 
-  if (tempSize > 0) {
+  async function walk(dir: string): Promise<void> {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(entryPath);
+      } else if (entry.isFile()) {
+        files.push(entryPath);
+      }
+    }
+  }
+
+  await walk(rootDir);
+  return files;
+}
+
+async function uploadArchiveFromTempDir(
+  crawlId: string,
+  outputDir: string
+): Promise<{ archivePath: string; outputSize: number }> {
+  const archivePath = getArchivePath(crawlId);
+  const sourceBytes = await getLocalDirectorySize(outputDir);
+
+  if (sourceBytes <= 0) {
+    const existingArchiveSize = await storage.getSize(archivePath);
+    if (existingArchiveSize > 0) {
+      return { archivePath, outputSize: existingArchiveSize };
+    }
+    throw new Error(`No crawl output found in temp (${outputDir}) and no existing archive at ${archivePath}`);
+  }
+
+  const files = await walkLocalFiles(outputDir);
+  if (files.length === 0) {
+    throw new Error(`No files found to archive in ${outputDir}`);
+  }
+
+  await publishEvent(crawlId, {
+    type: "progress",
+    phase: "uploading",
+    upload: {
+      totalBytes: sourceBytes,
+      uploadedBytes: 0,
+      filesTotal: 1,
+      filesUploaded: 0,
+      currentFile: "archive.zip",
+      percent: 0,
+    },
+  });
+
+  const archive = archiver("zip", { zlib: { level: 9 } });
+  archive.on("warning", (error: Error) => {
+    console.warn("[Worker] Archive warning", {
+      crawlId,
+      outputDir,
+      error: error.message,
+    });
+  });
+  archive.on("error", (error: Error) => {
+    console.error("[Worker] Archive error", {
+      crawlId,
+      outputDir,
+      error: error.message,
+    });
+  });
+
+  const archiveStream = Readable.toWeb(archive) as unknown as ReadableStream<Uint8Array>;
+  let writeError: unknown;
+  const writePromise = storage.writeStream(archivePath, archiveStream).catch((error) => {
+    writeError = error;
+  });
+
+  try {
+    for (const file of files) {
+      const relativePath = path.relative(outputDir, file).replace(/\\/g, "/");
+      archive.file(file, { name: relativePath });
+    }
+
+    await archive.finalize();
+    await writePromise;
+    if (writeError) {
+      throw writeError;
+    }
+
+    const outputSize = await storage.getSize(archivePath);
     await publishEvent(crawlId, {
       type: "progress",
       phase: "uploading",
       upload: {
-        totalBytes: tempSize,
-        uploadedBytes: 0,
-        filesTotal: 0,
-        filesUploaded: 0,
-        percent: 0,
+        totalBytes: sourceBytes,
+        uploadedBytes: sourceBytes,
+        filesTotal: 1,
+        filesUploaded: 1,
+        currentFile: "archive.zip",
+        percent: 100,
       },
     });
-
-    const movedPath = await storage.moveToFinal(outputDir, crawlId, {
-      onProgress: async (progress: MoveToFinalProgress) => {
-        const totalBytes = progress.totalBytes > 0 ? progress.totalBytes : tempSize;
-        const uploadedBytes = Math.min(progress.uploadedBytes, totalBytes);
-        const percent = totalBytes > 0 ? Math.min(100, (uploadedBytes / totalBytes) * 100) : 100;
-
-        await publishEvent(crawlId, {
-          type: "progress",
-          phase: "uploading",
-          upload: {
-            totalBytes,
-            uploadedBytes,
-            filesTotal: progress.filesTotal,
-            filesUploaded: progress.filesUploaded,
-            currentFile: progress.currentFile,
-            percent,
-          },
-        });
-      },
-    });
-    return {
-      finalPath: movedPath,
-      outputSize: await storage.getSize(movedPath),
-    };
+    await fs.rm(outputDir, { recursive: true, force: true }).catch(() => undefined);
+    return { archivePath, outputSize };
+  } catch (error) {
+    await storage.deleteDir(archivePath).catch(() => undefined);
+    archive.destroy(error as Error);
+    throw error;
   }
-
-  // If temp output is gone, a previous attempt may have already moved it.
-  const existingFinalSize = await storage.getSize(finalPath);
-  if (existingFinalSize > 0) {
-    return { finalPath, outputSize: existingFinalSize };
-  }
-
-  throw new Error(`No crawl output found in temp (${outputDir}) or final (${finalPath})`);
 }
 
 async function pruneOldArchives(siteId: string, keepCount: number, currentCrawlId: string): Promise<void> {
@@ -272,8 +277,12 @@ async function pruneOldArchives(siteId: string, keepCount: number, currentCrawlI
       continue;
     }
 
-    await storage.deleteDir(outputPath).catch(() => undefined);
-    await storage.deleteDir(getArchivePath(outputPath)).catch(() => undefined);
+    if (outputPath.endsWith(".zip")) {
+      await storage.deleteDir(outputPath).catch(() => undefined);
+    } else {
+      await storage.deleteDir(outputPath).catch(() => undefined);
+      await storage.deleteDir(getLegacyArchivePath(outputPath)).catch(() => undefined);
+    }
 
     await db
       .update(crawls)
@@ -340,7 +349,7 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
   const progressPersistIntervalMs = parsePositiveIntEnv("CRAWL_PROGRESS_PERSIST_INTERVAL_MS", 1500);
   const statusCheckIntervalMs = parsePositiveIntEnv("CRAWL_STATUS_CHECK_INTERVAL_MS", 3000);
   const maxSiteConcurrency = parsePositiveIntEnv("MAX_SITE_CONCURRENCY", 30);
-  const zipPrebuildTimeoutMs = parsePositiveIntEnv("ZIP_PREBUILD_TIMEOUT_MS", 120000);
+  const archiveUploadTimeoutMs = parsePositiveIntEnv("ARCHIVE_UPLOAD_TIMEOUT_MS", 180000);
   const crawlConcurrency = Math.max(1, Math.min(site.concurrency ?? 5, maxSiteConcurrency));
   const globalDownloadBlacklist = await readGlobalDownloadBlacklist();
   const combinedDownloadBlacklist = Array.from(
@@ -492,12 +501,16 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
     await publishEvent(crawlId, {
       type: "log",
       level: "info",
-      message: "Uploading output to storage",
+      message: "Compressing and uploading ZIP archive to storage",
       timestamp: new Date().toISOString(),
     });
 
     await assertCrawlIsActive();
-    const { finalPath, outputSize } = await moveOutputToFinal(crawlId, outputDir);
+    const { archivePath, outputSize } = await withTimeout(
+      uploadArchiveFromTempDir(crawlId, outputDir),
+      archiveUploadTimeoutMs,
+      `Archive upload for crawl ${crawlId}`
+    );
 
     await assertCrawlIsActive(true);
 
@@ -506,7 +519,7 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
       .set({
         status: "completed",
         completedAt: new Date(),
-        outputPath: finalPath,
+        outputPath: archivePath,
         outputSizeBytes: outputSize,
         totalPages: result.total,
         succeededPages: result.succeeded,
@@ -525,31 +538,9 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
     await publishEvent(crawlId, {
       type: "log",
       level: "info",
-      message: "Building ZIP archive for instant download",
+      message: "ZIP archive uploaded and ready for download",
       timestamp: new Date().toISOString(),
     });
-
-    try {
-      await withTimeout(
-        createPrebuiltArchive(crawlId, finalPath),
-        zipPrebuildTimeoutMs,
-        `ZIP prebuild for crawl ${crawlId}`
-      );
-      await publishEvent(crawlId, {
-        type: "log",
-        level: "info",
-        message: "ZIP archive ready for instant download",
-        timestamp: new Date().toISOString(),
-      });
-    } catch (error) {
-      console.error(`[Worker] Failed to prebuild archive: ${crawlId}`, error);
-      await publishEvent(crawlId, {
-        type: "log",
-        level: "warn",
-        message: `ZIP prebuild failed: ${(error as Error).message}. Download will fall back to on-demand ZIP generation.`,
-        timestamp: new Date().toISOString(),
-      });
-    }
 
     await pruneOldArchives(siteId, site.maxArchivesToKeep ?? Number.POSITIVE_INFINITY, crawlId);
 
@@ -580,25 +571,18 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
           timestamp: new Date().toISOString(),
         });
 
-        const { finalPath, outputSize } = await moveOutputToFinal(crawlId, outputDir);
-
-        // Try to build ZIP for partial results too
-        try {
-          await withTimeout(
-            createPrebuiltArchive(crawlId, finalPath),
-            zipPrebuildTimeoutMs,
-            `ZIP prebuild for partial crawl ${crawlId}`
-          );
-        } catch {
-          // Non-critical
-        }
+        const { archivePath, outputSize } = await withTimeout(
+          uploadArchiveFromTempDir(crawlId, outputDir),
+          archiveUploadTimeoutMs,
+          `Archive upload for timed out crawl ${crawlId}`
+        );
 
         await db
           .update(crawls)
           .set({
             status: "timed_out",
             completedAt: new Date(),
-            outputPath: finalPath,
+            outputPath: archivePath,
             outputSizeBytes: outputSize,
             errorMessage,
           })

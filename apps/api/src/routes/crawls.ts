@@ -1,7 +1,6 @@
 import { Hono } from "hono";
 import { eq, desc, and } from "drizzle-orm";
 import { crawls, crawlLogs, sites } from "../db/schema.js";
-import { downloadZip } from "client-zip";
 import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import type { AppEnv } from "../env.js";
@@ -242,7 +241,7 @@ app.post("/:id/cancel", async (c) => {
   return c.json({ crawl: updated });
 });
 
-// Download crawl as zip — Workers-compatible using client-zip
+// Download crawl as zip — archive is prebuilt and stored by the worker.
 app.get("/:id/download", async (c) => {
   const db = c.get("db");
   const storage = c.get("storage");
@@ -265,67 +264,28 @@ app.get("/:id/download", async (c) => {
 
   const siteName = crawl.site?.name || "archive";
   const filename = `${siteName}-${crawl.id.slice(0, 8)}.zip`;
-
-  const preferPrebuiltZip = process.env.PREFER_PREBUILT_ZIP === "true";
-  if (preferPrebuiltZip) {
-    const archivePath = `${crawl.outputPath}.zip`;
-    try {
-      const archiveExists = await storage.exists(archivePath);
-      if (archiveExists) {
-        return new Response(storage.readStream(archivePath), {
-          headers: {
-            "Content-Type": "application/zip",
-            "Content-Disposition": `attachment; filename="${filename}"`,
-          },
-        });
-      }
-    } catch (error) {
-      console.warn("[download] Failed to read prebuilt archive", {
-        crawlId: id,
-        archivePath,
-        error: (error as Error).message,
-      });
-    }
-  }
-
-  // Fall back to on-demand zip generation using client-zip (Workers-compatible)
-  const outputPrefix = `${crawl.outputPath}/`;
-  let files: string[];
+  const archivePath = crawl.outputPath.endsWith(".zip") ? crawl.outputPath : `${crawl.outputPath}.zip`;
 
   try {
-    files = (await storage.listFiles(crawl.outputPath)).filter((file) =>
-      file.startsWith(outputPrefix)
-    );
+    const archiveExists = await storage.exists(archivePath);
+    if (!archiveExists) {
+      return c.json({ error: "Archive not found" }, 404);
+    }
+
+    return new Response(storage.readStream(archivePath), {
+      headers: {
+        "Content-Type": "application/zip",
+        "Content-Disposition": `attachment; filename="${filename}"`,
+      },
+    });
   } catch (error) {
-    console.error("[download] Failed to list crawl files", {
+    console.error("[download] Failed to read archive from storage", {
       crawlId: id,
-      outputPath: crawl.outputPath,
+      archivePath,
       error: (error as Error).message,
     });
     return c.json({ error: "Failed to load archive from storage" }, 500);
   }
-
-  if (files.length === 0) {
-    return c.json({ error: "No files found" }, 404);
-  }
-
-  // Create an async iterable of file entries for client-zip
-  async function* fileEntries() {
-    for (const file of files) {
-      const relativePath = file.slice(outputPrefix.length);
-      const stream = storage.readStream(file);
-      yield { name: relativePath, input: stream };
-    }
-  }
-
-  const zipStream = downloadZip(fileEntries());
-
-  return new Response(zipStream.body, {
-    headers: {
-      "Content-Type": "application/zip",
-      "Content-Disposition": `attachment; filename="${filename}"`,
-    },
-  });
 });
 
 export const crawlsRoutes = app;

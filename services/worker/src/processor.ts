@@ -1,6 +1,6 @@
 import { Worker, Job, Queue, UnrecoverableError } from "bullmq";
 import Redis from "ioredis";
-import { eq, and, inArray, lte, desc, isNotNull } from "drizzle-orm";
+import { eq, and, or, inArray, lte, desc, isNotNull } from "drizzle-orm";
 import { crawlSite, type CrawlProgress, type LogLevel } from "@dxd/scraper";
 import { getStorage } from "@dxd/storage";
 import { db, sites, crawls, crawlLogs, settings } from "./db.js";
@@ -665,7 +665,7 @@ async function reconcileOrphanedCrawls(): Promise<void> {
   const possiblyOrphaned = await db.query.crawls.findMany({
     where: and(
       inArray(crawls.status, ["pending", "running", "uploading"]),
-      lte(crawls.createdAt, cutoff)
+      or(eq(crawls.status, "pending"), lte(crawls.createdAt, cutoff))
     ),
     limit: 50,
   });
@@ -677,6 +677,25 @@ async function reconcileOrphanedCrawls(): Promise<void> {
   for (const crawl of possiblyOrphaned) {
     const queueJob = await crawlQueue.getJob(crawl.id);
     if (!queueJob) {
+      if (crawl.status === "pending" && crawl.siteId) {
+        try {
+          await crawlQueue.add(
+            "crawl",
+            {
+              siteId: crawl.siteId,
+              crawlId: crawl.id,
+            },
+            {
+              jobId: crawl.id,
+            }
+          );
+          console.warn(`[Worker] Re-enqueued orphaned pending crawl ${crawl.id}`);
+          continue;
+        } catch (error) {
+          console.error(`[Worker] Failed to re-enqueue orphaned crawl ${crawl.id}`, error);
+        }
+      }
+
       await db
         .update(crawls)
         .set({
@@ -690,8 +709,44 @@ async function reconcileOrphanedCrawls(): Promise<void> {
     }
 
     const state = await queueJob.getState();
-    if (state === "active" || state === "waiting" || state === "delayed" || state === "prioritized") {
+    if (
+      state === "active" ||
+      state === "waiting" ||
+      state === "delayed" ||
+      state === "prioritized" ||
+      state === "waiting-children"
+    ) {
       continue;
+    }
+
+    if (crawl.status === "pending" && crawl.siteId) {
+      try {
+        await queueJob.remove();
+      } catch {
+        // Ignore if already gone.
+      }
+
+      try {
+        await crawlQueue.add(
+          "crawl",
+          {
+            siteId: crawl.siteId,
+            crawlId: crawl.id,
+          },
+          {
+            jobId: crawl.id,
+          }
+        );
+        console.warn(
+          `[Worker] Re-enqueued pending crawl ${crawl.id} from terminal queue state ${state}`
+        );
+        continue;
+      } catch (error) {
+        console.error(
+          `[Worker] Failed to re-enqueue pending crawl ${crawl.id} from state ${state}`,
+          error
+        );
+      }
     }
 
     await db
@@ -737,10 +792,16 @@ export function startWorker() {
 
   worker.on("completed", (completedJob) => {
     console.log(`[Worker] Job completed: ${completedJob.id}`);
+    void reconcileOrphanedCrawls().catch((error) => {
+      console.error("[Worker] Failed post-completion orphan reconciliation:", error);
+    });
   });
 
   worker.on("failed", (failedJob, error) => {
     console.error(`[Worker] Job failed: ${failedJob?.id}`, error.message);
+    void reconcileOrphanedCrawls().catch((reconcileError) => {
+      console.error("[Worker] Failed post-failure orphan reconciliation:", reconcileError);
+    });
   });
 
   worker.on("error", (error) => {

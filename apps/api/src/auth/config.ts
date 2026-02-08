@@ -13,6 +13,20 @@ export interface AuthConfigOptions {
   authSecret?: string;
   githubClientId?: string;
   githubClientSecret?: string;
+  cookieDomain?: string;
+}
+
+function normalizeCookieDomain(cookieDomain?: string): string | undefined {
+  if (!cookieDomain) {
+    return undefined;
+  }
+
+  const normalized = cookieDomain.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+
+  return normalized.startsWith(".") ? normalized : `.${normalized}`;
 }
 
 /**
@@ -26,6 +40,12 @@ export function getAuthConfigFactory(db: Database, options: AuthConfigOptions) {
   return function getAuthConfig(): AuthConfig {
     const frontendUrl = options.frontendUrl.replace(/\/+$/, "");
     const isProduction = options.isProduction;
+    const cookieDomain = normalizeCookieDomain(options.cookieDomain);
+    const sharedCookieOptions = {
+      sameSite: "none" as const,
+      secure: true,
+      ...(cookieDomain ? { domain: cookieDomain } : {}),
+    };
 
     return {
       basePath: "/api/auth",
@@ -102,26 +122,20 @@ export function getAuthConfigFactory(db: Database, options: AuthConfigOptions) {
               name: "next-auth.session-token",
               options: {
                 httpOnly: true,
-                sameSite: "none",
-                secure: true,
-                domain: ".designxdevelop.com",
+                ...sharedCookieOptions,
               },
             },
             callbackUrl: {
               name: "next-auth.callback-url",
               options: {
-                sameSite: "none",
-                secure: true,
-                domain: ".designxdevelop.com",
+                ...sharedCookieOptions,
               },
             },
             csrfToken: {
               name: "next-auth.csrf-token",
               options: {
                 httpOnly: true,
-                sameSite: "none",
-                secure: true,
-                domain: ".designxdevelop.com",
+                ...sharedCookieOptions,
               },
             },
           }

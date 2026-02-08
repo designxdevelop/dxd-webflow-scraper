@@ -9,7 +9,6 @@ import nodeFs from "node:fs";
 import path from "node:path";
 import archiver from "archiver";
 import { once } from "node:events";
-import { Readable } from "node:stream";
 
 const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
 const storage = getStorage();
@@ -176,6 +175,70 @@ async function walkLocalFiles(rootDir: string): Promise<string[]> {
   return files;
 }
 
+function createFileReadableStream(
+  filePath: string,
+  chunkSize = 8 * 1024 * 1024
+): ReadableStream<Uint8Array> {
+  let fileHandle: Awaited<ReturnType<typeof fs.open>> | null = null;
+  let position = 0;
+
+  const closeFileHandle = async (): Promise<void> => {
+    const handle = fileHandle;
+    fileHandle = null;
+    if (!handle) {
+      return;
+    }
+    try {
+      await handle.close();
+    } catch (error) {
+      if (!isBadFileDescriptorError(error)) {
+        throw error;
+      }
+    }
+  };
+
+  return new ReadableStream<Uint8Array>({
+    async start() {
+      fileHandle = await fs.open(filePath, "r");
+    },
+    async pull(controller) {
+      if (!fileHandle) {
+        controller.error(new Error(`Archive stream handle is not available for ${filePath}`));
+        return;
+      }
+
+      try {
+        const buffer = Buffer.allocUnsafe(chunkSize);
+        const { bytesRead } = await fileHandle.read(buffer, 0, chunkSize, position);
+
+        if (bytesRead <= 0) {
+          await closeFileHandle();
+          controller.close();
+          return;
+        }
+
+        position += bytesRead;
+        controller.enqueue(buffer.subarray(0, bytesRead));
+      } catch (error) {
+        await closeFileHandle().catch(() => undefined);
+        controller.error(error);
+      }
+    },
+    async cancel() {
+      await closeFileHandle();
+    },
+  });
+}
+
+function isBadFileDescriptorError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    error.code === "EBADF"
+  );
+}
+
 async function uploadArchiveFromTempDir(
   crawlId: string,
   outputDir: string
@@ -250,8 +313,8 @@ async function uploadArchiveFromTempDir(
     await archive.finalize();
     await once(archiveOutput, "close");
 
-    const archiveReadStream = nodeFs.createReadStream(localArchivePath);
     const archiveSize = (await fs.stat(localArchivePath)).size;
+    const archiveReadStream = createFileReadableStream(localArchivePath);
     
     // Upload with progress tracking and throttling to prevent TCP_OVERWINDOW
     // Add 50ms delay between 16MB parts to smooth out network traffic
@@ -261,7 +324,7 @@ async function uploadArchiveFromTempDir(
     
     await storage.writeStream(
       archivePath,
-      Readable.toWeb(archiveReadStream) as unknown as ReadableStream<Uint8Array>,
+      archiveReadStream,
       {
         totalSize: archiveSize,
         partDelayMs,

@@ -23,6 +23,7 @@ const corsAllowedOrigins = (process.env.CORS_ALLOWED_ORIGINS || "")
   .map((v) => v.trim())
   .filter(Boolean);
 const isProduction = process.env.NODE_ENV === "production";
+const authCookieDomain = process.env.AUTH_COOKIE_DOMAIN;
 
 const app = createApp({
   deps: {
@@ -34,6 +35,7 @@ const app = createApp({
   frontendUrl,
   corsAllowedOrigins,
   isProduction,
+  authCookieDomain,
 });
 
 // Export for type inference

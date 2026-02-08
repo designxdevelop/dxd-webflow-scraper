@@ -23,6 +23,7 @@ export default {
         .map((v) => v.trim())
         .filter(Boolean),
       isProduction: env.NODE_ENV === "production",
+      authCookieDomain: env.AUTH_COOKIE_DOMAIN,
     });
 
     return app.fetch(request, env, ctx);

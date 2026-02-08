@@ -17,6 +17,7 @@ export interface AppConfig {
   frontendUrl: string;
   corsAllowedOrigins: string[];
   isProduction: boolean;
+  authCookieDomain?: string;
 }
 
 function toOrigin(value: string): string | null {
@@ -54,7 +55,16 @@ export function createApp(config: AppConfig) {
   app.use("*", contextMiddleware(deps));
 
   // Auth.js config — uses deps.db from context
-  app.use("*", initAuthConfig(getAuthConfigFactory(deps.db, { isProduction, frontendUrl })));
+  app.use(
+    "*",
+    initAuthConfig(
+      getAuthConfigFactory(deps.db, {
+        isProduction,
+        frontendUrl,
+        cookieDomain: config.authCookieDomain,
+      })
+    )
+  );
 
   // Logging
   app.use("*", logger());

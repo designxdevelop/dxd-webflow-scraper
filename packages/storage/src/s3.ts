@@ -2,8 +2,8 @@ import path from "node:path";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
 import {
   S3Client,
   GetObjectCommand,
@@ -109,7 +109,7 @@ export class S3Storage implements StorageAdapter {
 
     try {
       // Spool the Web stream to disk first so S3 upload has a deterministic content length.
-      await pipeline(Readable.fromWeb(stream as any), fs.createWriteStream(tempFilePath));
+      await writeWebStreamToFile(stream, tempFilePath);
       const stat = await fsp.stat(tempFilePath);
 
       await this.putObjectWithFallback(filePath, tempFilePath, stat.size, options);
@@ -530,6 +530,63 @@ async function streamToBuffer(stream: Readable): Promise<Buffer> {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   return Buffer.concat(chunks);
+}
+
+async function writeWebStreamToFile(
+  stream: ReadableStream<Uint8Array>,
+  destinationPath: string
+): Promise<number> {
+  const writable = fs.createWriteStream(destinationPath);
+  const reader = stream.getReader();
+  let writtenBytes = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      if (!value || value.byteLength === 0) {
+        continue;
+      }
+
+      await writeChunkToFile(writable, value);
+      writtenBytes += value.byteLength;
+    }
+
+    await closeFileWriteStream(writable);
+    return writtenBytes;
+  } catch (error) {
+    writable.destroy(error as Error);
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+async function writeChunkToFile(writable: fs.WriteStream, chunk: Uint8Array): Promise<void> {
+  const canContinue = writable.write(chunk);
+  if (canContinue) {
+    return;
+  }
+  await once(writable, "drain");
+}
+
+async function closeFileWriteStream(writable: fs.WriteStream): Promise<void> {
+  if (writable.destroyed) {
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    writable.end((error?: Error | null) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
 }
 
 function resolveMultipartPartSize(totalBytes: number, preferredPartSize: number): number {

@@ -24,6 +24,7 @@ export type Bindings = {
   FRONTEND_URL: string;
   CORS_ALLOWED_ORIGINS: string;
   NODE_ENV: string;
+  AUTH_COOKIE_DOMAIN?: string;
 
   // Worker service (for job enqueue via HTTP)
   WORKER_SERVICE_URL: string;

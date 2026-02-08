@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { once } from "node:events";
 import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
 import type { MoveToFinalOptions, StorageAdapter, WriteStreamOptions } from "./adapter.js";
 
 export class LocalStorage implements StorageAdapter {
@@ -14,11 +14,61 @@ export class LocalStorage implements StorageAdapter {
     await fsp.writeFile(fullPath, content);
   }
 
-  async writeStream(filePath: string, stream: ReadableStream<Uint8Array>, _options?: WriteStreamOptions): Promise<void> {
+  async writeStream(filePath: string, stream: ReadableStream<Uint8Array>, options?: WriteStreamOptions): Promise<void> {
     const fullPath = path.join(this.basePath, filePath);
     await fsp.mkdir(path.dirname(fullPath), { recursive: true });
-    await pipeline(Readable.fromWeb(stream as any), fs.createWriteStream(fullPath));
-    // Note: Local storage doesn't support multipart/progress - options ignored
+
+    const totalBytesHint =
+      typeof options?.totalSize === "number" && Number.isFinite(options.totalSize)
+        ? Math.max(0, options.totalSize)
+        : 0;
+    const totalParts = 1;
+    let uploadedBytes = 0;
+    let lastReportedBytes = 0;
+    const reportEveryBytes = 4 * 1024 * 1024;
+
+    if (options?.onProgress) {
+      await options.onProgress({
+        totalBytes: totalBytesHint,
+        uploadedBytes: 0,
+        partNumber: 0,
+        totalParts,
+        currentPartBytes: 0,
+      });
+    }
+
+    uploadedBytes = await writeWebStreamToFile(stream, fullPath, async (writtenBytes, chunkBytes) => {
+      uploadedBytes = writtenBytes;
+      if (!options?.onProgress) {
+        return;
+      }
+
+      const shouldReport =
+        writtenBytes === chunkBytes || writtenBytes - lastReportedBytes >= reportEveryBytes;
+      if (!shouldReport) {
+        return;
+      }
+
+      lastReportedBytes = writtenBytes;
+      await options.onProgress({
+        totalBytes: totalBytesHint > 0 ? totalBytesHint : writtenBytes,
+        uploadedBytes: writtenBytes,
+        partNumber: writtenBytes > 0 ? 1 : 0,
+        totalParts,
+        currentPartBytes: chunkBytes,
+      });
+    });
+
+    if (options?.onProgress) {
+      const finalTotalBytes = totalBytesHint > 0 ? totalBytesHint : uploadedBytes;
+      await options.onProgress({
+        totalBytes: finalTotalBytes,
+        uploadedBytes,
+        partNumber: uploadedBytes > 0 ? 1 : 0,
+        totalParts,
+        currentPartBytes: 0,
+      });
+    }
   }
 
   async readFile(filePath: string): Promise<Buffer> {
@@ -122,4 +172,63 @@ export class LocalStorage implements StorageAdapter {
   getPublicUrl(filePath: string): string {
     return `/preview/${filePath}`;
   }
+}
+
+async function writeWebStreamToFile(
+  stream: ReadableStream<Uint8Array>,
+  destinationPath: string,
+  onChunk?: (writtenBytes: number, chunkBytes: number) => void | Promise<void>
+): Promise<number> {
+  const writable = fs.createWriteStream(destinationPath);
+  const reader = stream.getReader();
+  let writtenBytes = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      if (!value || value.byteLength === 0) {
+        continue;
+      }
+
+      await writeChunk(writable, value);
+      writtenBytes += value.byteLength;
+      await onChunk?.(writtenBytes, value.byteLength);
+    }
+
+    await closeWritable(writable);
+    return writtenBytes;
+  } catch (error) {
+    writable.destroy(error as Error);
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+async function writeChunk(writable: fs.WriteStream, chunk: Uint8Array): Promise<void> {
+  const canContinue = writable.write(chunk);
+  if (canContinue) {
+    return;
+  }
+  await once(writable, "drain");
+}
+
+async function closeWritable(writable: fs.WriteStream): Promise<void> {
+  if (writable.destroyed) {
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    writable.end((error?: Error | null) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
 }

@@ -24,6 +24,17 @@ const workerConnection = new Redis(redisUrl, {
 
 const crawlQueue = new Queue<CrawlJobData>("crawl-jobs", {
   connection: workerConnection,
+  defaultJobOptions: {
+    // Critical: Prevent BullMQ from auto-retrying failed jobs
+    // We handle retries manually by preserving state and checking shouldResume
+    attempts: 1,
+    // Don't keep completed jobs around - we track state in DB
+    removeOnComplete: { count: 10 },
+    // Keep some failed jobs for debugging, but not too many
+    removeOnFail: { count: 50 },
+    // Disable backoff - we don't want automatic retries with delay
+    backoff: { type: "fixed", delay: 0 },
+  },
 });
 
 interface CrawlJobData {
@@ -769,6 +780,8 @@ async function reconcileOrphanedCrawls(): Promise<void> {
             },
             {
               jobId: crawl.id,
+              // Ensure no retries - orphan requeue should be a fresh attempt
+              attempts: 1,
             }
           );
           const requeueMsg = `RE-ENQUEUED orphaned pending crawl (age: ${ageMinutes}min, status: ${crawl.status})`;
@@ -867,9 +880,11 @@ export function startWorker() {
     concurrency: workerConcurrency,
     lockDuration,
     stalledInterval,
-    maxStalledCount,
-    removeOnComplete: { count: 100 },
-    removeOnFail: { count: 100 },
+    // Critical: Set to 0 to prevent BullMQ from auto-retrying stalled jobs
+    // Stalled jobs are handled by orphan reconciliation - we want manual control
+    maxStalledCount: 0,
+    // Disable automatic job recovery - we'll handle it via reconcileOrphanedCrawls
+    skipLockRenewal: true,
   });
 
   const reconcileIntervalMs = parsePositiveIntEnv("ORPHAN_CRAWL_RECONCILE_INTERVAL_MS", 120000);
@@ -885,11 +900,25 @@ export function startWorker() {
   reconcileTimer.unref();
 
   worker.on("completed", (completedJob) => {
-    console.log(`[Worker] Job completed: ${completedJob.id}`);
+    console.log(`[Worker] BullMQ job completed: ${completedJob.id} (attempt ${completedJob.attemptsMade + 1}/${completedJob.opts.attempts ?? 1})`);
   });
 
   worker.on("failed", (failedJob, error) => {
-    console.error(`[Worker] Job failed: ${failedJob?.id}`, error.message);
+    if (!failedJob) {
+      console.error("[Worker] Job failed (no job data):", error.message);
+      return;
+    }
+    const attempts = failedJob.attemptsMade + 1;
+    const maxAttempts = failedJob.opts.attempts ?? 1;
+    const willRetry = attempts < maxAttempts;
+    console.error(
+      `[Worker] BullMQ job failed: ${failedJob.id} (attempt ${attempts}/${maxAttempts})${willRetry ? " - Will retry" : " - Final attempt"}`,
+      error.message
+    );
+  });
+
+  worker.on("stalled", (jobId) => {
+    console.warn(`[Worker] BullMQ job stalled: ${jobId} - Will be handled by orphan reconciliation`);
   });
 
   worker.on("error", (error) => {

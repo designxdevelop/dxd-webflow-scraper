@@ -48,12 +48,14 @@ export class S3Storage implements StorageAdapter {
 
   async writeFile(filePath: string, content: Buffer | string): Promise<void> {
     const body = typeof content === "string" ? Buffer.from(content) : content;
-    await this.client.send(
-      new PutObjectCommand({
-        Bucket: this.config.bucket,
-        Key: filePath,
-        Body: body,
-      })
+    await this.sendWithDiagnostics("PutObject", () =>
+      this.client.send(
+        new PutObjectCommand({
+          Bucket: this.config.bucket,
+          Key: filePath,
+          Body: body,
+        })
+      )
     );
   }
 
@@ -75,11 +77,13 @@ export class S3Storage implements StorageAdapter {
   }
 
   async readFile(filePath: string): Promise<Buffer> {
-    const res = await this.client.send(
-      new GetObjectCommand({
-        Bucket: this.config.bucket,
-        Key: filePath,
-      })
+    const res = await this.sendWithDiagnostics("GetObject", () =>
+      this.client.send(
+        new GetObjectCommand({
+          Bucket: this.config.bucket,
+          Key: filePath,
+        })
+      )
     );
 
     if (!res.Body) {
@@ -94,11 +98,13 @@ export class S3Storage implements StorageAdapter {
     return new ReadableStream<Uint8Array>({
       start: async (controller) => {
         try {
-          const res = await this.client.send(
-            new GetObjectCommand({
-              Bucket: this.config.bucket,
-              Key: filePath,
-            })
+          const res = await this.sendWithDiagnostics("GetObject", () =>
+            this.client.send(
+              new GetObjectCommand({
+                Bucket: this.config.bucket,
+                Key: filePath,
+              })
+            )
           );
 
           if (!res.Body) {
@@ -123,12 +129,14 @@ export class S3Storage implements StorageAdapter {
     let continuationToken: string | undefined;
 
     do {
-      const res = await this.client.send(
-        new ListObjectsV2Command({
-          Bucket: this.config.bucket,
-          Prefix: prefix,
-          ContinuationToken: continuationToken,
-        })
+      const res = await this.sendWithDiagnostics("ListObjectsV2", () =>
+        this.client.send(
+          new ListObjectsV2Command({
+            Bucket: this.config.bucket,
+            Prefix: prefix,
+            ContinuationToken: continuationToken,
+          })
+        )
       );
 
       const contents = res.Contents || [];
@@ -146,14 +154,16 @@ export class S3Storage implements StorageAdapter {
     const keys = await this.listFiles(dirPath);
     if (keys.length === 0) return;
 
-    await this.client.send(
-      new DeleteObjectsCommand({
-        Bucket: this.config.bucket,
-        Delete: {
-          Objects: keys.map((Key) => ({ Key })),
-          Quiet: true,
-        },
-      })
+    await this.sendWithDiagnostics("DeleteObjects", () =>
+      this.client.send(
+        new DeleteObjectsCommand({
+          Bucket: this.config.bucket,
+          Delete: {
+            Objects: keys.map((Key) => ({ Key })),
+            Quiet: true,
+          },
+        })
+      )
     );
   }
 
@@ -162,12 +172,14 @@ export class S3Storage implements StorageAdapter {
     let continuationToken: string | undefined;
 
     do {
-      const res = await this.client.send(
-        new ListObjectsV2Command({
-          Bucket: this.config.bucket,
-          Prefix: dirPath,
-          ContinuationToken: continuationToken,
-        })
+      const res = await this.sendWithDiagnostics("ListObjectsV2", () =>
+        this.client.send(
+          new ListObjectsV2Command({
+            Bucket: this.config.bucket,
+            Prefix: dirPath,
+            ContinuationToken: continuationToken,
+          })
+        )
       );
 
       const contents = res.Contents || [];
@@ -183,11 +195,13 @@ export class S3Storage implements StorageAdapter {
 
   async exists(filePath: string): Promise<boolean> {
     try {
-      await this.client.send(
-        new HeadObjectCommand({
-          Bucket: this.config.bucket,
-          Key: filePath,
-        })
+      await this.sendWithDiagnostics("HeadObject", () =>
+        this.client.send(
+          new HeadObjectCommand({
+            Bucket: this.config.bucket,
+            Key: filePath,
+          })
+        )
       );
       return true;
     } catch (error) {
@@ -249,13 +263,15 @@ export class S3Storage implements StorageAdapter {
 
   private async putObjectWithFallback(key: string, localFilePath: string, size: number): Promise<void> {
     try {
-      await this.client.send(
-        new PutObjectCommand({
-          Bucket: this.config.bucket,
-          Key: key,
-          Body: fs.createReadStream(localFilePath),
-          ContentLength: size,
-        })
+      await this.sendWithDiagnostics("PutObject", () =>
+        this.client.send(
+          new PutObjectCommand({
+            Bucket: this.config.bucket,
+            Key: key,
+            Body: fs.createReadStream(localFilePath),
+            ContentLength: size,
+          })
+        )
       );
     } catch (error) {
       if (!isChecksumMismatchError(error) && !isSignatureMismatchError(error)) {
@@ -264,14 +280,29 @@ export class S3Storage implements StorageAdapter {
 
       // Fallback: upload from an in-memory buffer to avoid stream signing/checksum edge cases.
       const buffer = await fsp.readFile(localFilePath);
-      await this.client.send(
-        new PutObjectCommand({
-          Bucket: this.config.bucket,
-          Key: key,
-          Body: buffer,
-          ContentLength: buffer.length,
-        })
+      await this.sendWithDiagnostics("PutObject", () =>
+        this.client.send(
+          new PutObjectCommand({
+            Bucket: this.config.bucket,
+            Key: key,
+            Body: buffer,
+            ContentLength: buffer.length,
+          })
+        )
       );
+    }
+  }
+
+  private async sendWithDiagnostics<T>(operation: string, request: () => Promise<T>): Promise<T> {
+    try {
+      return await request();
+    } catch (error) {
+      await logDeserializationDiagnostics(error, {
+        operation,
+        endpoint: this.config.endpoint,
+        bucket: this.config.bucket,
+      });
+      throw error;
     }
   }
 }
@@ -339,4 +370,90 @@ function isSignatureMismatchError(error: unknown): boolean {
   const code = maybeError.Code || maybeError.name || "";
   const message = maybeError.message || "";
   return code === "SignatureDoesNotMatch" || /signature.*does not match/i.test(message);
+}
+
+type DeserializationContext = {
+  operation: string;
+  endpoint: string;
+  bucket: string;
+};
+
+async function logDeserializationDiagnostics(error: unknown, context: DeserializationContext): Promise<void> {
+  if (!looksLikeXmlDeserializationError(error)) {
+    return;
+  }
+
+  const response = getHiddenResponse(error);
+  const statusCode =
+    response?.statusCode ??
+    response?.status ??
+    (typeof response?.$metadata?.httpStatusCode === "number" ? response.$metadata.httpStatusCode : undefined);
+  const headers = sanitizeHeaders(response?.headers);
+  const bodySnippet = await getBodySnippet(response?.body);
+
+  console.error("[S3Storage] XML deserialization error from S3-compatible API", {
+    operation: context.operation,
+    endpoint: context.endpoint,
+    bucket: context.bucket,
+    message: error instanceof Error ? error.message : String(error),
+    statusCode,
+    headers,
+    bodySnippet,
+  });
+}
+
+function looksLikeXmlDeserializationError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return /deserialization error|expected closing tag|xml/i.test(error.message);
+}
+
+function getHiddenResponse(error: unknown): any {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  return (error as any).$response;
+}
+
+function sanitizeHeaders(headers: unknown): Record<string, string> | undefined {
+  if (!headers || typeof headers !== "object") {
+    return undefined;
+  }
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(headers as Record<string, unknown>)) {
+    if (v == null) continue;
+    out[k] = Array.isArray(v) ? v.join(", ") : String(v);
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+async function getBodySnippet(body: unknown, limit = 512): Promise<string | undefined> {
+  if (!body) {
+    return undefined;
+  }
+  if (typeof body === "string") {
+    return body.slice(0, limit);
+  }
+  if (Buffer.isBuffer(body)) {
+    return body.subarray(0, limit).toString("utf8");
+  }
+  if (typeof (body as { [Symbol.asyncIterator]?: unknown })[Symbol.asyncIterator] === "function") {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    try {
+      for await (const chunk of body as AsyncIterable<unknown>) {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as any);
+        const remaining = limit - size;
+        if (remaining <= 0) break;
+        chunks.push(buffer.subarray(0, remaining));
+        size += Math.min(buffer.length, remaining);
+        if (size >= limit) break;
+      }
+      return Buffer.concat(chunks).toString("utf8");
+    } catch {
+      return "[unavailable: failed reading response body]";
+    }
+  }
+  return undefined;
 }

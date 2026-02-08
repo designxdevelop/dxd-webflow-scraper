@@ -80,13 +80,16 @@ export function createApp(config: AppConfig) {
 
   // Ensure SSE responses include CORS headers
   app.use("/api/sse/*", async (c, next) => {
-    const origin = c.req.header("origin");
-    if (isAllowedOrigin(origin)) {
-      c.header("Access-Control-Allow-Origin", origin);
-      c.header("Access-Control-Allow-Credentials", "true");
-      c.header("Vary", "Origin");
-    }
     await next();
+
+    const origin = c.req.header("origin");
+    if (!isAllowedOrigin(origin)) {
+      return;
+    }
+
+    c.res.headers.set("Access-Control-Allow-Origin", origin);
+    c.res.headers.set("Access-Control-Allow-Credentials", "true");
+    c.res.headers.set("Vary", "Origin");
   });
 
   // Health check (public)

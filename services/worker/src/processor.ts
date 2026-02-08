@@ -311,9 +311,14 @@ async function pruneOldArchives(siteId: string, keepCount: number, currentCrawlI
 async function processCrawlJob(job: Job<CrawlJobData>) {
   const { siteId, crawlId } = job.data;
 
-  console.log(`[Worker] Starting crawl job: ${crawlId} for site: ${siteId}`);
   const maxAttempts = Math.max(1, job.opts.attempts ?? 1);
   const currentAttempt = job.attemptsMade + 1;
+  const isRetry = currentAttempt > 1;
+  const previousFailedReason = job.failedReason;
+
+  console.log(
+    `[Worker] ${isRetry ? "RETRY" : "START"} crawl job: ${crawlId} (attempt ${currentAttempt}/${maxAttempts}) for site: ${siteId}${previousFailedReason ? ` | Previous error: ${previousFailedReason.substring(0, 200)}` : ""}`
+  );
 
   const site = await db.query.sites.findFirst({
     where: eq(sites.id, siteId),
@@ -343,10 +348,31 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
     .set({ status: "running", startedAt: crawl.startedAt ?? new Date(), errorMessage: null })
     .where(eq(crawls.id, crawlId));
 
+  // Log detailed restart information
+  if (isRetry) {
+    const restartMessage = previousFailedReason
+      ? `RETRY attempt ${currentAttempt}/${maxAttempts} after failure: ${previousFailedReason.substring(0, 300)}${previousFailedReason.length > 300 ? "..." : ""}`
+      : `RETRY attempt ${currentAttempt}/${maxAttempts} (previous failure reason not available)`;
+
+    await publishEvent(crawlId, {
+      type: "log",
+      level: "warn",
+      message: restartMessage,
+      timestamp: new Date().toISOString(),
+    });
+
+    // Also persist to crawl logs for audit trail
+    await db.insert(crawlLogs).values({
+      crawlId,
+      level: "warn",
+      message: restartMessage,
+    });
+  }
+
   await publishEvent(crawlId, {
     type: "log",
     level: "info",
-    message: `Starting crawl of ${site.url}`,
+    message: `Starting crawl of ${site.url}${isRetry ? ` (attempt ${currentAttempt}/${maxAttempts})` : ""}`,
     timestamp: new Date().toISOString(),
   });
 
@@ -354,7 +380,7 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
   const progressPersistIntervalMs = parsePositiveIntEnv("CRAWL_PROGRESS_PERSIST_INTERVAL_MS", 1500);
   const statusCheckIntervalMs = parsePositiveIntEnv("CRAWL_STATUS_CHECK_INTERVAL_MS", 3000);
   const maxSiteConcurrency = parsePositiveIntEnv("MAX_SITE_CONCURRENCY", 30);
-  const archiveUploadTimeoutMs = parsePositiveIntEnv("ARCHIVE_UPLOAD_TIMEOUT_MS", 180000);
+  const archiveUploadTimeoutMs = parsePositiveIntEnv("ARCHIVE_UPLOAD_TIMEOUT_MS", 600000); // 10 minutes default for large archives
   const crawlConcurrency = Math.max(1, Math.min(site.concurrency ?? 5, maxSiteConcurrency));
   const globalDownloadBlacklist = await readGlobalDownloadBlacklist();
   const combinedDownloadBlacklist = Array.from(
@@ -414,15 +440,62 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
   // Create output directory — check if partial output exists for resume
   const outputDir = await storage.createTempDir(crawlId);
   let shouldResume = false;
+  let resumeStats: { succeeded: number; failed: number } | null = null;
+
+  const stateFile = `${outputDir}/.crawl-state.json`;
   try {
-    const stateFile = `${outputDir}/.crawl-state.json`;
-    const stateData = await fs.readFile(stateFile, "utf-8").catch(() => null);
-    if (stateData) {
-      shouldResume = true;
-      console.log(`[Worker] Found existing crawl state for ${crawlId}, resuming`);
+    if (await fs.access(stateFile).then(() => true).catch(() => false)) {
+      const stateData = await fs.readFile(stateFile, "utf-8");
+      const state = JSON.parse(stateData);
+      if (state && Array.isArray(state.succeeded) && Array.isArray(state.failed)) {
+        shouldResume = true;
+        resumeStats = {
+          succeeded: state.succeeded.length,
+          failed: state.failed.length,
+        };
+        const resumeMsg = `Found existing crawl state: ${resumeStats.succeeded} succeeded, ${resumeStats.failed} failed URLs will be skipped`;
+        console.log(`[Worker] ${resumeMsg} for crawl ${crawlId}`);
+        await publishEvent(crawlId, {
+          type: "log",
+          level: "info",
+          message: resumeMsg,
+          timestamp: new Date().toISOString(),
+        });
+      } else {
+        const invalidMsg = "Found state file but it has invalid format, starting fresh";
+        console.warn(`[Worker] ${invalidMsg} for crawl ${crawlId}`);
+        await publishEvent(crawlId, {
+          type: "log",
+          level: "warn",
+          message: invalidMsg,
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } else if (isRetry) {
+      // We expected a state file since this is a retry, but it's missing
+      const missingMsg = `Expected state file for retry but none found at ${stateFile}. Crawl will restart from beginning (previous temp dir may have been cleaned up).`;
+      console.warn(`[Worker] ${missingMsg} for crawl ${crawlId}`);
+      await publishEvent(crawlId, {
+        type: "log",
+        level: "error",
+        message: missingMsg,
+        timestamp: new Date().toISOString(),
+      });
+      await db.insert(crawlLogs).values({
+        crawlId,
+        level: "error",
+        message: missingMsg,
+      });
     }
-  } catch {
-    // No state file — fresh crawl
+  } catch (error) {
+    const readErrorMsg = `Failed to read state file: ${(error as Error).message}. Starting fresh.`;
+    console.error(`[Worker] ${readErrorMsg} for crawl ${crawlId}`);
+    await publishEvent(crawlId, {
+      type: "log",
+      level: "error",
+      message: readErrorMsg,
+      timestamp: new Date().toISOString(),
+    });
   }
 
   try {
@@ -503,10 +576,13 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
       .set({ status: "uploading" })
       .where(eq(crawls.id, crawlId));
 
+    const timeoutMinutes = Math.round(archiveUploadTimeoutMs / 60000);
+    const outputSizeBytes = await getLocalDirectorySize(outputDir);
+    const sizeMB = (outputSizeBytes / 1024 / 1024).toFixed(1);
     await publishEvent(crawlId, {
       type: "log",
       level: "info",
-      message: "Compressing and uploading ZIP archive to storage",
+      message: `Compressing and uploading ${sizeMB}MB ZIP archive (timeout: ${timeoutMinutes}min)`,
       timestamp: new Date().toISOString(),
     });
 
@@ -674,8 +750,14 @@ async function reconcileOrphanedCrawls(): Promise<void> {
     return;
   }
 
+  console.log(`[Worker] Orphan check: Found ${possiblyOrphaned.length} crawls older than ${orphanGraceMs}ms in active states`);
+
   for (const crawl of possiblyOrphaned) {
     const queueJob = await crawlQueue.getJob(crawl.id);
+    const ageMinutes = crawl.createdAt
+      ? Math.round((Date.now() - crawl.createdAt.getTime()) / 60000)
+      : 0;
+
     if (!queueJob) {
       if (crawl.status === "pending" && crawl.siteId) {
         try {
@@ -689,20 +771,46 @@ async function reconcileOrphanedCrawls(): Promise<void> {
               jobId: crawl.id,
             }
           );
-          console.warn(`[Worker] Re-enqueued orphaned pending crawl ${crawl.id}`);
+          const requeueMsg = `RE-ENQUEUED orphaned pending crawl (age: ${ageMinutes}min, status: ${crawl.status})`;
+          console.warn(`[Worker] ${requeueMsg}: ${crawl.id}`);
+          // Publish event so UI shows this happened
+          await publishEvent(crawl.id, {
+            type: "log",
+            level: "warn",
+            message: `Orphan reconciliation: ${requeueMsg}. This may indicate a previous worker crash or restart.`,
+            timestamp: new Date().toISOString(),
+          });
+          await db.insert(crawlLogs).values({
+            crawlId: crawl.id,
+            level: "warn",
+            message: `Orphan reconciliation: ${requeueMsg}`,
+          });
           continue;
         } catch (error) {
           console.error(`[Worker] Failed to re-enqueue orphaned crawl ${crawl.id}`, error);
         }
       }
 
+      const failMsg = `Crawl marked failed automatically: no queue job found for ${crawl.status} crawl (age: ${ageMinutes}min)`;
+      console.warn(`[Worker] ${failMsg}: ${crawl.id}`);
+      await publishEvent(crawl.id, {
+        type: "log",
+        level: "error",
+        message: `Orphan reconciliation: ${failMsg}`,
+        timestamp: new Date().toISOString(),
+      });
+      await db.insert(crawlLogs).values({
+        crawlId: crawl.id,
+        level: "error",
+        message: `Orphan reconciliation: ${failMsg}`,
+      });
+
       await db
         .update(crawls)
         .set({
           status: "failed",
           completedAt: new Date(),
-          errorMessage:
-            "Crawl marked failed automatically: no queue job found for pending/running crawl.",
+          errorMessage: failMsg,
         })
         .where(eq(crawls.id, crawl.id));
       continue;
@@ -716,15 +824,31 @@ async function reconcileOrphanedCrawls(): Promise<void> {
       state === "prioritized" ||
       state === "waiting-children"
     ) {
+      // Job is in a valid queue state, not an orphan
       continue;
     }
+
+    // Job exists but is in a terminal state (completed, failed, etc.)
+    const terminalMsg = `Crawl marked failed automatically: queue job in terminal state "${state}" (age: ${ageMinutes}min)`;
+    console.warn(`[Worker] ${terminalMsg}: ${crawl.id}`);
+    await publishEvent(crawl.id, {
+      type: "log",
+      level: "error",
+      message: `Orphan reconciliation: ${terminalMsg}`,
+      timestamp: new Date().toISOString(),
+    });
+    await db.insert(crawlLogs).values({
+      crawlId: crawl.id,
+      level: "error",
+      message: `Orphan reconciliation: ${terminalMsg}`,
+    });
 
     await db
       .update(crawls)
       .set({
         status: "failed",
         completedAt: new Date(),
-        errorMessage: `Crawl marked failed automatically: queue job state was ${state}.`,
+        errorMessage: terminalMsg,
       })
       .where(eq(crawls.id, crawl.id));
   }

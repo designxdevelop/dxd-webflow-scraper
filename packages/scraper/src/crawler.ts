@@ -18,7 +18,8 @@ import {
 import { extractLinks } from "./link-extractor.js";
 
 const CRAWL_ABORT_MESSAGE = "Crawl cancelled by request.";
-const STATE_FLUSH_BATCH_SIZE = 100;
+// Configurable batch size for state persistence - smaller = more frequent writes but safer against crashes
+const STATE_FLUSH_BATCH_SIZE = readPositiveInt("CRAWL_STATE_FLUSH_BATCH_SIZE", 25);
 
 function readPositiveInt(envVar: string, fallback: number): number {
   const raw = process.env[envVar];
@@ -421,7 +422,14 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
 
           const workers = Array.from({ length: workerCount }, async () => {
             while (true) {
-              await assertNotAborted(options);
+              try {
+                await assertNotAborted(options);
+              } catch (error) {
+                if (isAbortError(error)) {
+                  return; // Graceful exit on abort
+                }
+                throw error;
+              }
 
               const url = getNextUrl();
               if (!url) return;

@@ -40,10 +40,21 @@ export async function updateStateProgress(
   succeeded: string[],
   failed: string[]
 ): Promise<void> {
+  const prevSucceeded = state.succeeded.length;
+  const prevFailed = state.failed.length;
+
   state.succeeded = [...new Set([...state.succeeded, ...succeeded])];
   state.failed = [...new Set([...state.failed, ...failed])];
   // Remove succeeded URLs from failed list if they're now successful
   state.failed = state.failed.filter((url) => !state.succeeded.includes(url));
+
+  const newSucceeded = state.succeeded.length - prevSucceeded;
+  const newFailed = state.failed.length - prevFailed;
+
+  if (newSucceeded > 0 || newFailed > 0) {
+    log.debug(`Persisting state: +${newSucceeded} succeeded, +${newFailed} failed (total: ${state.succeeded.length} succeeded, ${state.failed.length} failed)`);
+  }
+
   await saveState(statePath, state);
 }
 

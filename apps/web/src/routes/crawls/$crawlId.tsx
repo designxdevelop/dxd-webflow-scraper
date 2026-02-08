@@ -93,7 +93,20 @@ function CrawlDetailPage() {
     succeeded: crawl.succeededPages || 0,
     failed: crawl.failedPages || 0,
   };
-  const uploadProgress = crawl.status === "uploading" ? progress?.upload : undefined;
+  
+  // Upload progress: prefer live SSE data, fall back to database values
+  const uploadProgress = crawl.status === "uploading" 
+    ? (progress?.upload || {
+        totalBytes: crawl.uploadTotalBytes || 0,
+        uploadedBytes: crawl.uploadUploadedBytes || 0,
+        filesTotal: crawl.uploadFilesTotal || 1,
+        filesUploaded: crawl.uploadFilesUploaded || 0,
+        currentFile: crawl.uploadCurrentFile || undefined,
+        percent: crawl.uploadTotalBytes 
+          ? Math.round(((crawl.uploadUploadedBytes || 0) / crawl.uploadTotalBytes) * 100)
+          : 0,
+      })
+    : undefined;
 
   const allLogs = dedupeLogs([...(crawl.logs || []).reverse(), ...liveLogs]);
 

@@ -30,6 +30,19 @@ function readPositiveInt(envVar: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+async function withTimeout<T>(fn: () => Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  return Promise.race([
+    fn(),
+    new Promise<T>((_, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      // Clean up timer if promise resolves first
+      timer.unref?.();
+    }),
+  ]);
+}
+
 async function shouldAbort(options: CrawlOptions): Promise<boolean> {
   if (options.signal?.aborted) {
     return true;
@@ -374,6 +387,7 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
 
     const maxRetries = readPositiveInt("CRAWL_PAGE_MAX_RETRIES", 2);
     const retryBaseDelayMs = readPositiveInt("CRAWL_PAGE_RETRY_DELAY_MS", 2000);
+    const pageTimeoutMs = readPositiveInt("CRAWL_PAGE_TIMEOUT_MS", 120000); // 2 min per page max
 
     async function recoverBrowserContext(browserIndex: number): Promise<void> {
       if (browserRecoveries[browserIndex]) {
@@ -438,19 +452,23 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
               await reportProgress(url);
 
               try {
-                // B3: Retry with exponential backoff
+                // B3: Retry with exponential backoff + overall page timeout
                 const pageResult = await withRetry(
-                  () => processPage({
-                    url,
-                    context,
-                    outputDir: resolvedOutput,
-                    assets: assetDownloader,
-                    removeWebflowBadge: options.removeWebflowBadge ?? true,
-                    tryStaticFirst: staticFastPath,
-                    sitemapOnly,
-                    shouldAbort: options.shouldAbort,
-                    signal: options.signal,
-                  }),
+                  () => withTimeout(
+                    () => processPage({
+                      url,
+                      context,
+                      outputDir: resolvedOutput,
+                      assets: assetDownloader,
+                      removeWebflowBadge: options.removeWebflowBadge ?? true,
+                      tryStaticFirst: staticFastPath,
+                      sitemapOnly,
+                      shouldAbort: options.shouldAbort,
+                      signal: options.signal,
+                    }),
+                    pageTimeoutMs,
+                    `Page processing for ${url}`
+                  ),
                   maxRetries,
                   retryBaseDelayMs,
                   url,

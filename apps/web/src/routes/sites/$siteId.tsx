@@ -27,17 +27,20 @@ function toCronExpression(frequency: ScheduleFrequency, time: string, days: stri
     return null;
   }
 
+  // Convert from Mountain Time to UTC (UTC = MT + 7 hours)
+  const utcHour = (hour + 7) % 24;
+
   if (frequency === "daily") {
-    return `${minute} ${hour} * * *`;
+    return `${minute} ${utcHour} * * *`;
   }
 
   if (frequency === "monthly") {
     const dayOfMonth = monthlyDay || "1";
-    return `${minute} ${hour} ${dayOfMonth} * *`;
+    return `${minute} ${utcHour} ${dayOfMonth} * *`;
   }
 
   const dayList = days.length > 0 ? days.join(",") : "1";
-  return `${minute} ${hour} * * ${dayList}`;
+  return `${minute} ${utcHour} * * ${dayList}`;
 }
 
 function parseCron(cron: string | null): {
@@ -55,8 +58,13 @@ function parseCron(cron: string | null): {
     return { frequency: "daily", time: "05:00", days: ["1"], monthlyDay: "1" };
   }
 
-  const [minute, hour, dayOfMonth, , dayOfWeek] = parts;
-  const time = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  const [minute, hourStr, dayOfMonth, , dayOfWeek] = parts;
+  
+  // Convert UTC hour from cron back to Mountain Time (MT = UTC - 7)
+  const utcHour = Number.parseInt(hourStr, 10);
+  const mtHour = (utcHour - 7 + 24) % 24;
+  
+  const time = `${String(mtHour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 
   // If dayOfMonth is not "*" and dayOfWeek is "*", it's monthly
   if (dayOfMonth !== "*" && dayOfWeek === "*") {
@@ -512,7 +520,7 @@ function SiteDetailPage() {
                       className="input-dark"
                     />
                     <p className="text-xs font-mono mt-1" style={{ color: "#52525b" }}>
-                      Times are interpreted in the server timezone (UTC on Railway)
+                      Time in Mountain Time (America/Denver)
                     </p>
                   </div>
                 </>

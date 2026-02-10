@@ -27,17 +27,20 @@ function toCronExpression(frequency: ScheduleFrequency, time: string, days: stri
     return null;
   }
 
+  // Convert from Mountain Time to UTC (UTC = MT + 7 hours)
+  const utcHour = (hour + 7) % 24;
+
   if (frequency === "daily") {
-    return `${minute} ${hour} * * *`;
+    return `${minute} ${utcHour} * * *`;
   }
 
   if (frequency === "monthly") {
     const dayOfMonth = monthlyDay || "1";
-    return `${minute} ${hour} ${dayOfMonth} * *`;
+    return `${minute} ${utcHour} ${dayOfMonth} * *`;
   }
 
   const dayList = days.length > 0 ? days.join(",") : "1";
-  return `${minute} ${hour} * * ${dayList}`;
+  return `${minute} ${utcHour} * * ${dayList}`;
 }
 
 export const Route = createFileRoute("/sites/new")({
@@ -350,7 +353,7 @@ function NewSitePage() {
                   className="input-dark"
                 />
                 <p className="text-xs font-mono mt-1" style={{ color: "#52525b" }}>
-                  Times are interpreted in the server timezone (UTC on Railway)
+                  Time in Mountain Time (America/Denver)
                 </p>
               </div>
 

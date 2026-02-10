@@ -6,7 +6,7 @@ import { useState } from "react";
 import { ArrowLeft, Plus } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 
-type ScheduleFrequency = "daily" | "weekly";
+type ScheduleFrequency = "daily" | "weekly" | "monthly";
 
 const WEEKDAYS = [
   { label: "Sun", value: "0" },
@@ -18,7 +18,7 @@ const WEEKDAYS = [
   { label: "Sat", value: "6" },
 ];
 
-function toCronExpression(frequency: ScheduleFrequency, time: string, days: string[]): string | null {
+function toCronExpression(frequency: ScheduleFrequency, time: string, days: string[], monthlyDay?: string): string | null {
   const [hourString, minuteString] = time.split(":");
   const hour = Number.parseInt(hourString, 10);
   const minute = Number.parseInt(minuteString, 10);
@@ -29,6 +29,11 @@ function toCronExpression(frequency: ScheduleFrequency, time: string, days: stri
 
   if (frequency === "daily") {
     return `${minute} ${hour} * * *`;
+  }
+
+  if (frequency === "monthly") {
+    const dayOfMonth = monthlyDay || "1";
+    return `${minute} ${hour} ${dayOfMonth} * *`;
   }
 
   const dayList = days.length > 0 ? days.join(",") : "1";
@@ -56,6 +61,7 @@ function NewSitePage() {
   const [scheduleFrequency, setScheduleFrequency] = useState<ScheduleFrequency>("daily");
   const [scheduleTime, setScheduleTime] = useState("05:00");
   const [scheduleDays, setScheduleDays] = useState<string[]>(["1"]);
+  const [scheduleMonthlyDay, setScheduleMonthlyDay] = useState<string>("1");
 
   const createMutation = useMutation({
     mutationFn: sitesApi.create,
@@ -68,7 +74,7 @@ function NewSitePage() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const scheduleCron = formData.scheduleEnabled
-      ? toCronExpression(scheduleFrequency, scheduleTime, scheduleDays)
+      ? toCronExpression(scheduleFrequency, scheduleTime, scheduleDays, scheduleMonthlyDay)
       : null;
 
     createMutation.mutate({
@@ -78,7 +84,7 @@ function NewSitePage() {
   };
 
   const cronPreview = formData.scheduleEnabled
-    ? toCronExpression(scheduleFrequency, scheduleTime, scheduleDays)
+    ? toCronExpression(scheduleFrequency, scheduleTime, scheduleDays, scheduleMonthlyDay)
     : null;
 
   return (
@@ -274,6 +280,13 @@ function NewSitePage() {
                   >
                     Weekly
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setScheduleFrequency("monthly")}
+                    className={scheduleFrequency === "monthly" ? "btn-primary btn-sm" : "btn-secondary btn-sm"}
+                  >
+                    Monthly
+                  </button>
                 </div>
               </div>
 
@@ -305,6 +318,26 @@ function NewSitePage() {
                       );
                     })}
                   </div>
+                </div>
+              )}
+
+              {scheduleFrequency === "monthly" && (
+                <div>
+                  <label className="block text-xs font-medium mb-2" style={{ color: "#71717a" }}>Day of Month</label>
+                  <select
+                    value={scheduleMonthlyDay}
+                    onChange={(e) => setScheduleMonthlyDay(e.target.value)}
+                    className="input-dark"
+                  >
+                    {Array.from({ length: 31 }, (_, i) => i + 1).map((day) => (
+                      <option key={day} value={String(day)}>
+                        {day}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs font-mono mt-1" style={{ color: "#52525b" }}>
+                    Day of the month when the crawl will run
+                  </p>
                 </div>
               )}
 

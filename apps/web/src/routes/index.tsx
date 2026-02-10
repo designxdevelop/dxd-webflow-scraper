@@ -2,6 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { ApiError, sitesApi, crawlsApi } from "@/lib/api";
+import { formatToMountainDate } from "@/lib/date";
 import { Globe, Clock, ArrowRight, Activity, TrendingUp, Layers, Plus } from "lucide-react";
 import { useEffect } from "react";
 import { useNavigate } from "@tanstack/react-router";
@@ -288,12 +289,7 @@ function DashboardPage() {
                             {crawl.succeededPages ?? 0}/{crawl.totalPages ?? "?"} pages
                           </span>
                           <span className="text-xs font-mono" style={{ color: "#52525b" }}>
-                            {crawl.startedAt
-                              ? new Date(crawl.startedAt).toLocaleDateString("en-US", {
-                                  month: "short",
-                                  day: "numeric",
-                                })
-                              : "pending"}
+                            {crawl.startedAt ? formatToMountainDate(crawl.startedAt) : "pending"}
                           </span>
                         </div>
                         {crawl.totalPages && crawl.totalPages > 0 && (

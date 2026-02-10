@@ -2,6 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { crawlsApi } from "@/lib/api";
+import { formatToMountainDate } from "@/lib/date";
 import { History, ArrowRight, Download, Eye, Clock } from "lucide-react";
 
 export const Route = createFileRoute("/crawls/")({
@@ -217,12 +218,7 @@ function CrawlsPage() {
                           <Clock size={14} />
                           {crawl.startedAt ? (
                             <span>
-                              {new Date(crawl.startedAt).toLocaleDateString("en-US", {
-                                month: "short",
-                                day: "numeric",
-                                hour: "2-digit",
-                                minute: "2-digit",
-                              })}
+                              {formatToMountainDate(crawl.startedAt)}
                             </span>
                           ) : (
                             "pending"
@@ -360,10 +356,7 @@ function CrawlsPage() {
                       <Clock size={12} />
                       {crawl.startedAt ? (
                         <span>
-                          {new Date(crawl.startedAt).toLocaleDateString("en-US", {
-                            month: "short",
-                            day: "numeric",
-                          })}
+                          {formatToMountainDate(crawl.startedAt)}
                         </span>
                       ) : (
                         "pending"

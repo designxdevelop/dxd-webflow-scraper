@@ -2,6 +2,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { ApiError, sitesApi } from "@/lib/api";
+import { formatToMountainDate } from "@/lib/date";
 import { Plus, Globe, Trash2, Play, ExternalLink, Search } from "lucide-react";
 import { useEffect } from "react";
 
@@ -206,10 +207,7 @@ function SitesPage() {
                         <div className="flex items-center gap-2">
                           <StatusIndicator status={site.lastCrawl.status || "unknown"} />
                           <span className="text-xs font-mono" style={{ color: "#71717a" }}>
-                            {new Date(site.lastCrawl.createdAt).toLocaleDateString("en-US", {
-                              month: "short",
-                              day: "numeric",
-                            })}
+                            {formatToMountainDate(site.lastCrawl.createdAt)}
                           </span>
                         </div>
                       ) : (

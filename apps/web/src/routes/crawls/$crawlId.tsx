@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { crawlsApi } from "@/lib/api";
 import { useCrawlLogs } from "@/lib/hooks/useCrawlLogs";
+import { formatToMountainTime, formatToMountainTimeOnly } from "@/lib/date";
 import { ArrowLeft, Download, XCircle, Wifi, WifiOff, Ban } from "lucide-react";
 import { useEffect, useRef } from "react";
 
@@ -150,7 +151,7 @@ function CrawlDetailPage() {
               )}
             </div>
             <p className="text-sm font-mono mt-1" style={{ color: "#71717a" }}>
-              Started {crawl.startedAt ? new Date(crawl.startedAt).toLocaleString() : "pending"}
+              Started {crawl.startedAt ? formatToMountainTime(crawl.startedAt) : "pending"}
             </p>
           </div>
 
@@ -353,7 +354,7 @@ function CrawlDetailPage() {
                   <div key={i} className="py-1 flex gap-2">
                     <LogLevelBadge level={log.level} />
                     <span className="shrink-0" style={{ color: "#71717a" }}>
-                      {new Date(getLogTimestamp(log)).toLocaleTimeString()}
+                      {formatToMountainTimeOnly(getLogTimestamp(log))}
                     </span>
                     <span className="break-all" style={{ color: "#e2e8f0" }}>{log.message}</span>
                     {log.url && (

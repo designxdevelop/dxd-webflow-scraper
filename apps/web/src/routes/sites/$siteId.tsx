@@ -2,10 +2,11 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { sitesApi, crawlsApi } from "@/lib/api";
+import { formatToMountainTime } from "@/lib/date";
 import { ArrowLeft, Play, ExternalLink, Trash2, Download, Save } from "lucide-react";
 import { useEffect, useState } from "react";
 
-type ScheduleFrequency = "daily" | "weekly";
+type ScheduleFrequency = "daily" | "weekly" | "monthly";
 
 const WEEKDAYS = [
   { label: "Sun", value: "0" },
@@ -17,7 +18,7 @@ const WEEKDAYS = [
   { label: "Sat", value: "6" },
 ];
 
-function toCronExpression(frequency: ScheduleFrequency, time: string, days: string[]): string | null {
+function toCronExpression(frequency: ScheduleFrequency, time: string, days: string[], monthlyDay?: string): string | null {
   const [hourString, minuteString] = time.split(":");
   const hour = Number.parseInt(hourString, 10);
   const minute = Number.parseInt(minuteString, 10);
@@ -30,6 +31,11 @@ function toCronExpression(frequency: ScheduleFrequency, time: string, days: stri
     return `${minute} ${hour} * * *`;
   }
 
+  if (frequency === "monthly") {
+    const dayOfMonth = monthlyDay || "1";
+    return `${minute} ${hour} ${dayOfMonth} * *`;
+  }
+
   const dayList = days.length > 0 ? days.join(",") : "1";
   return `${minute} ${hour} * * ${dayList}`;
 }
@@ -38,25 +44,31 @@ function parseCron(cron: string | null): {
   frequency: ScheduleFrequency;
   time: string;
   days: string[];
+  monthlyDay: string;
 } {
   if (!cron) {
-    return { frequency: "daily", time: "05:00", days: ["1"] };
+    return { frequency: "daily", time: "05:00", days: ["1"], monthlyDay: "1" };
   }
 
   const parts = cron.split(" ");
   if (parts.length < 5) {
-    return { frequency: "daily", time: "05:00", days: ["1"] };
+    return { frequency: "daily", time: "05:00", days: ["1"], monthlyDay: "1" };
   }
 
-  const [minute, hour, , , dayOfWeek] = parts;
+  const [minute, hour, dayOfMonth, , dayOfWeek] = parts;
   const time = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 
+  // If dayOfMonth is not "*" and dayOfWeek is "*", it's monthly
+  if (dayOfMonth !== "*" && dayOfWeek === "*") {
+    return { frequency: "monthly", time, days: ["1"], monthlyDay: dayOfMonth };
+  }
+
   if (dayOfWeek === "*") {
-    return { frequency: "daily", time, days: ["1"] };
+    return { frequency: "daily", time, days: ["1"], monthlyDay: "1" };
   }
 
   const days = dayOfWeek.split(",").filter(Boolean);
-  return { frequency: "weekly", time, days: days.length > 0 ? days : ["1"] };
+  return { frequency: "weekly", time, days: days.length > 0 ? days : ["1"], monthlyDay: "1" };
 }
 
 export const Route = createFileRoute("/sites/$siteId")({
@@ -78,6 +90,7 @@ function SiteDetailPage() {
   const [scheduleFrequency, setScheduleFrequency] = useState<ScheduleFrequency>("daily");
   const [scheduleTime, setScheduleTime] = useState("05:00");
   const [scheduleDays, setScheduleDays] = useState<string[]>(["1"]);
+  const [scheduleMonthlyDay, setScheduleMonthlyDay] = useState<string>("1");
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [concurrency, setConcurrency] = useState(5);
@@ -108,6 +121,7 @@ function SiteDetailPage() {
     setScheduleFrequency(parsed.frequency);
     setScheduleTime(parsed.time);
     setScheduleDays(parsed.days);
+    setScheduleMonthlyDay(parsed.monthlyDay);
   }, [site]);
 
   const configurationMutation = useMutation({
@@ -428,6 +442,13 @@ function SiteDetailPage() {
                       >
                         Weekly
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => setScheduleFrequency("monthly")}
+                        className={scheduleFrequency === "monthly" ? "btn-primary btn-sm" : "btn-secondary btn-sm"}
+                      >
+                        Monthly
+                      </button>
                     </div>
                   </div>
 
@@ -462,6 +483,26 @@ function SiteDetailPage() {
                     </div>
                   )}
 
+                  {scheduleFrequency === "monthly" && (
+                    <div>
+                      <label className="block text-xs font-medium mb-2" style={{ color: "#71717a" }}>Day of Month</label>
+                      <select
+                        value={scheduleMonthlyDay}
+                        onChange={(e) => setScheduleMonthlyDay(e.target.value)}
+                        className="input-dark"
+                      >
+                        {Array.from({ length: 31 }, (_, i) => i + 1).map((day) => (
+                          <option key={day} value={String(day)}>
+                            {day}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-xs font-mono mt-1" style={{ color: "#52525b" }}>
+                        Day of the month when the crawl will run
+                      </p>
+                    </div>
+                  )}
+
                   <div>
                     <label className="block text-xs font-medium mb-1" style={{ color: "#71717a" }}>Time</label>
                     <input
@@ -483,7 +524,7 @@ function SiteDetailPage() {
                 <label className="block text-xs font-medium mb-1" style={{ color: "#71717a" }}>Generated Cron</label>
                 <div className="input-dark font-mono text-sm" style={{ backgroundColor: "#09090b" }}>
                   {scheduleEnabled
-                    ? toCronExpression(scheduleFrequency, scheduleTime, scheduleDays) || "Invalid time"
+                    ? toCronExpression(scheduleFrequency, scheduleTime, scheduleDays, scheduleMonthlyDay) || "Invalid time"
                     : "\u2014"}
                 </div>
               </div>
@@ -492,7 +533,7 @@ function SiteDetailPage() {
                 <div>
                   <label className="block text-xs font-medium mb-1" style={{ color: "#71717a" }}>Next Run</label>
                   <div className="text-sm font-mono" style={{ color: "#a1a1aa" }}>
-                    {new Date(site.nextScheduledAt).toLocaleString()}
+                    {formatToMountainTime(site.nextScheduledAt)}
                   </div>
                 </div>
               )}
@@ -501,7 +542,7 @@ function SiteDetailPage() {
                 type="button"
                 onClick={() => {
                   const scheduleCron = scheduleEnabled
-                    ? toCronExpression(scheduleFrequency, scheduleTime, scheduleDays)
+                    ? toCronExpression(scheduleFrequency, scheduleTime, scheduleDays, scheduleMonthlyDay)
                     : null;
 
                   scheduleMutation.mutate({
@@ -553,7 +594,7 @@ function SiteDetailPage() {
                       <div className="flex items-center gap-3">
                         <StatusBadge status={crawl.status || "unknown"} />
                         <span className="text-xs font-mono" style={{ color: "#71717a" }}>
-                          {new Date(crawl.createdAt).toLocaleString()}
+                          {formatToMountainTime(crawl.createdAt)}
                         </span>
                       </div>
                       <p className="text-sm mt-1.5 font-mono" style={{ color: "#a1a1aa" }}>

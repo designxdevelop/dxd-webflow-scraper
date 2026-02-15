@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { ApiError, sitesApi, crawlsApi } from "@/lib/api";
 import { formatToMountainDate } from "@/lib/date";
+import { SiteFavicon } from "@/components/site-favicon";
 import { Globe, Clock, ArrowRight, Activity, TrendingUp, Layers, Plus } from "lucide-react";
 import { useEffect } from "react";
 import { useNavigate } from "@tanstack/react-router";
@@ -201,15 +202,7 @@ function DashboardPage() {
                         aria-label={`Site ${site.name}`}
                       >
                         <div className="flex items-center gap-3 min-w-0 flex-1">
-                          <div
-                            className="w-8 h-8 shrink-0 rounded-md flex items-center justify-center text-sm font-bold font-mono"
-                            style={{
-                              backgroundColor: "#27272a",
-                              color: "#818cf8",
-                            }}
-                          >
-                            {site.name.charAt(0).toUpperCase()}
-                          </div>
+                          <SiteFavicon siteName={site.name} siteUrl={site.url} className="w-8 h-8" />
                           <div className="min-w-0 flex-1">
                             <p className="font-medium text-sm truncate" style={{ color: "#fafafa" }}>
                               {site.name}

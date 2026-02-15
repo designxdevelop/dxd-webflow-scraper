@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { ApiError, sitesApi } from "@/lib/api";
 import { formatToMountainDate } from "@/lib/date";
+import { SiteFavicon } from "@/components/site-favicon";
 import { Plus, Globe, Trash2, Play, ExternalLink, Search } from "lucide-react";
 import { useEffect } from "react";
 
@@ -176,15 +177,7 @@ function SitesPage() {
                         params={{ siteId: site.id }}
                         className="flex items-center gap-3"
                       >
-                        <div
-                          className="w-8 h-8 rounded-md flex items-center justify-center text-sm font-bold font-mono"
-                          style={{
-                            backgroundColor: "#27272a",
-                            color: "#818cf8",
-                          }}
-                        >
-                          {site.name.charAt(0).toUpperCase()}
-                        </div>
+                        <SiteFavicon siteName={site.name} siteUrl={site.url} className="w-8 h-8" />
                         <span className="font-medium text-sm group-hover:underline" style={{ color: "#fafafa" }}>
                           {site.name}
                         </span>
@@ -289,15 +282,7 @@ function SitesPage() {
                     params={{ siteId: site.id }}
                     className="flex items-center gap-3 min-w-0 flex-1"
                   >
-                    <div
-                      className="w-10 h-10 shrink-0 rounded-md flex items-center justify-center text-sm font-bold font-mono"
-                      style={{
-                        backgroundColor: "#27272a",
-                        color: "#818cf8",
-                      }}
-                    >
-                      {site.name.charAt(0).toUpperCase()}
-                    </div>
+                    <SiteFavicon siteName={site.name} siteUrl={site.url} className="w-10 h-10" />
                     <div className="min-w-0">
                       <p className="font-medium text-sm truncate" style={{ color: "#fafafa" }}>
                         {site.name}

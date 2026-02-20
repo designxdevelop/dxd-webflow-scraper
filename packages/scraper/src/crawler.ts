@@ -80,6 +80,49 @@ function isPlaywrightClosedError(error: unknown): boolean {
   );
 }
 
+export function resolveCrawlSource(
+  baseUrl: string,
+  sitemapUrls: string[],
+  options: Pick<CrawlOptions, "sitemapOnly" | "discoverLinks">
+): {
+  seedUrls: string[];
+  usedSitemap: boolean;
+  usedFallback: boolean;
+  sitemapOnly: boolean;
+  discoverLinks: boolean;
+} {
+  if (sitemapUrls.length > 0) {
+    const sitemapOnly = options.sitemapOnly !== false;
+    const discoverLinks = sitemapOnly ? false : (options.discoverLinks ?? false);
+    return {
+      seedUrls: sitemapUrls,
+      usedSitemap: true,
+      usedFallback: false,
+      sitemapOnly,
+      discoverLinks,
+    };
+  }
+
+  const normalizedBaseUrl = normalizeSeedUrl(baseUrl);
+  return {
+    seedUrls: [normalizedBaseUrl],
+    usedSitemap: false,
+    usedFallback: true,
+    sitemapOnly: false,
+    discoverLinks: true,
+  };
+}
+
+function normalizeSeedUrl(url: string): string {
+  const parsed = new URL(url);
+  parsed.hash = "";
+  parsed.search = "";
+  if (!parsed.pathname) {
+    parsed.pathname = "/";
+  }
+  return parsed.toString();
+}
+
 /**
  * Determine if an error is transient and worth retrying.
  */
@@ -172,17 +215,20 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
     await assertNotAborted(options);
     log.info(`Resolving sitemap for ${options.baseUrl}`);
     const sitemapUrls = await fetchSitemapUrls(options.baseUrl);
-    if (!sitemapUrls.length) {
-      throw new Error("No URLs discovered from sitemap.");
+    const crawlSource = resolveCrawlSource(options.baseUrl, sitemapUrls, options);
+    if (crawlSource.usedFallback) {
+      log.warn(
+        `No sitemap URLs discovered for ${options.baseUrl}; falling back to homepage seed + link discovery`
+      );
     }
 
     // Filter URLs based on exclude patterns
-    let filteredUrls = sitemapUrls;
+    let filteredUrls = crawlSource.seedUrls;
     if (options.excludePatterns && options.excludePatterns.length > 0) {
       const patterns = options.excludePatterns.map((p) => new RegExp(p));
-      filteredUrls = sitemapUrls.filter((url) => !patterns.some((pattern) => pattern.test(url)));
-      if (filteredUrls.length < sitemapUrls.length) {
-        log.info(`Excluded ${sitemapUrls.length - filteredUrls.length} URLs based on patterns`);
+      filteredUrls = crawlSource.seedUrls.filter((url) => !patterns.some((pattern) => pattern.test(url)));
+      if (filteredUrls.length < crawlSource.seedUrls.length) {
+        log.info(`Excluded ${crawlSource.seedUrls.length - filteredUrls.length} URLs based on patterns`);
       }
     }
 
@@ -204,7 +250,8 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
       };
     }
 
-    log.info(`Found ${pages.length} URLs to crawl (${allPages.length} total in sitemap).`);
+    const sourceLabel = crawlSource.usedSitemap ? "sitemap" : "homepage seed";
+    log.info(`Found ${pages.length} URLs to crawl (${allPages.length} total from ${sourceLabel}).`);
 
     if (!state) {
       state = {
@@ -336,8 +383,8 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
     let nextIndex = 0;
 
     // B7: Link discovery support
-    const sitemapOnly = options.sitemapOnly !== false;
-    const discoverLinks = sitemapOnly ? false : (options.discoverLinks ?? false);
+    const sitemapOnly = crawlSource.sitemapOnly;
+    const discoverLinks = crawlSource.discoverLinks;
     const maxTotalUrls = options.maxPages ?? Infinity;
     const staticFastPath = options.staticFastPath !== false;
     let staticPageCount = 0;

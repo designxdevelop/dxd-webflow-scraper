@@ -75,22 +75,11 @@ export class S3Storage implements StorageAdapter {
   }
 
   async writeFile(filePath: string, content: Buffer | string): Promise<void> {
-    const body = typeof content === "string" ? Buffer.from(content) : content;
-    if (body.length === 0) {
-      await this.sendWithDiagnostics("PutObject", () =>
-        this.client.send(
-          new PutObjectCommand({
-            Bucket: this.config.bucket,
-            Key: filePath,
-            Body: body,
-          })
-        )
-      );
-      return;
-    }
-
     const uploadTempDir = path.join(this.tempRoot, ".stream-uploads");
     await fsp.mkdir(uploadTempDir, { recursive: true });
+
+    const body =
+      typeof content === "string" ? new TextEncoder().encode(content) : new Uint8Array(content);
 
     const tempFilePath = path.join(uploadTempDir, `${randomUUID()}.upload`);
     try {
@@ -99,6 +88,11 @@ export class S3Storage implements StorageAdapter {
     } finally {
       await fsp.unlink(tempFilePath).catch(() => undefined);
     }
+  }
+
+  async uploadFile(filePath: string, localFilePath: string, options?: WriteStreamOptions): Promise<void> {
+    const stat = await fsp.stat(localFilePath);
+    await this.putObjectWithFallback(filePath, localFilePath, stat.size, options);
   }
 
   async writeStream(filePath: string, stream: ReadableStream<Uint8Array>, options?: WriteStreamOptions): Promise<void> {

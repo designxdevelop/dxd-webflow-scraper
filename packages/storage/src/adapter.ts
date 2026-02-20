@@ -31,6 +31,7 @@ export interface WriteStreamOptions extends MultipartUploadOptions {
 
 export interface StorageAdapter {
   writeFile(path: string, content: Buffer | string): Promise<void>;
+  uploadFile?(path: string, localFilePath: string, options?: WriteStreamOptions): Promise<void>;
   writeStream(path: string, stream: ReadableStream<Uint8Array>, options?: WriteStreamOptions): Promise<void>;
   readFile(path: string): Promise<Buffer>;
   readStream(path: string): ReadableStream<Uint8Array>;

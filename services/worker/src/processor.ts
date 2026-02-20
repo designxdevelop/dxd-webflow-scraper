@@ -314,7 +314,6 @@ async function uploadArchiveFromTempDir(
     await once(archiveOutput, "close");
 
     const archiveSize = (await fs.stat(localArchivePath)).size;
-    const archiveReadStream = createFileReadableStream(localArchivePath);
     
     // Upload with progress tracking and throttling to prevent TCP_OVERWINDOW
     // Add 50ms delay between 16MB parts to smooth out network traffic
@@ -322,49 +321,52 @@ async function uploadArchiveFromTempDir(
     let lastDbUpdate = 0;
     const dbUpdateIntervalMs = 1000; // Update DB every second max
     
-    await storage.writeStream(
-      archivePath,
-      archiveReadStream,
-      {
-        totalSize: archiveSize,
-        partDelayMs,
-        onProgress: async (progress) => {
-          const percent = progress.totalBytes > 0 
-            ? Math.round((progress.uploadedBytes / progress.totalBytes) * 100)
-            : 0;
-          
-          // Publish real-time progress event
-          await publishEvent(crawlId, {
-            type: "progress",
-            phase: "uploading",
-            upload: {
-              totalBytes: progress.totalBytes,
-              uploadedBytes: progress.uploadedBytes,
-              filesTotal: 1,
-              filesUploaded: progress.partNumber > 0 ? 1 : 0,
-              currentFile: `archive.zip (part ${progress.partNumber}/${progress.totalParts})`,
-              percent,
-            },
-          });
-          
-          // Update DB throttled (max once per second)
-          const now = Date.now();
-          if (now - lastDbUpdate >= dbUpdateIntervalMs) {
-            lastDbUpdate = now;
-            await db
-              .update(crawls)
-              .set({
-                uploadTotalBytes: progress.totalBytes,
-                uploadUploadedBytes: progress.uploadedBytes,
-                uploadFilesTotal: 1,
-                uploadFilesUploaded: progress.partNumber > 0 ? 1 : 0,
-                uploadCurrentFile: `archive.zip (part ${progress.partNumber}/${progress.totalParts})`,
-              })
-              .where(eq(crawls.id, crawlId));
-          }
-        },
-      }
-    );
+    const uploadOptions = {
+      totalSize: archiveSize,
+      partDelayMs,
+      onProgress: async (progress: any) => {
+        const percent = progress.totalBytes > 0 
+          ? Math.round((progress.uploadedBytes / progress.totalBytes) * 100)
+          : 0;
+        
+        // Publish real-time progress event
+        await publishEvent(crawlId, {
+          type: "progress",
+          phase: "uploading",
+          upload: {
+            totalBytes: progress.totalBytes,
+            uploadedBytes: progress.uploadedBytes,
+            filesTotal: 1,
+            filesUploaded: progress.partNumber > 0 ? 1 : 0,
+            currentFile: `archive.zip (part ${progress.partNumber}/${progress.totalParts})`,
+            percent,
+          },
+        });
+        
+        // Update DB throttled (max once per second)
+        const now = Date.now();
+        if (now - lastDbUpdate >= dbUpdateIntervalMs) {
+          lastDbUpdate = now;
+          await db
+            .update(crawls)
+            .set({
+              uploadTotalBytes: progress.totalBytes,
+              uploadUploadedBytes: progress.uploadedBytes,
+              uploadFilesTotal: 1,
+              uploadFilesUploaded: progress.partNumber > 0 ? 1 : 0,
+              uploadCurrentFile: `archive.zip (part ${progress.partNumber}/${progress.totalParts})`,
+            })
+            .where(eq(crawls.id, crawlId));
+        }
+      },
+    };
+
+    if (storage.uploadFile) {
+      await storage.uploadFile(archivePath, localArchivePath, uploadOptions);
+    } else {
+      const archiveReadStream = createFileReadableStream(localArchivePath);
+      await storage.writeStream(archivePath, archiveReadStream, uploadOptions);
+    }
 
     const outputSize = await storage.getSize(archivePath);
     

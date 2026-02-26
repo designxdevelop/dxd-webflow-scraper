@@ -3,6 +3,7 @@ import Redis from "ioredis";
 import { eq, and, inArray, lte, desc, isNotNull } from "drizzle-orm";
 import { crawlSite, type CrawlProgress, type LogLevel } from "@dxd/scraper";
 import { getStorage } from "@dxd/storage";
+import type { MultipartUploadProgress } from "@dxd/storage/adapter";
 import { db, sites, crawls, crawlLogs, settings } from "./db.js";
 import fs from "node:fs/promises";
 import nodeFs from "node:fs";
@@ -324,7 +325,7 @@ async function uploadArchiveFromTempDir(
     const uploadOptions = {
       totalSize: archiveSize,
       partDelayMs,
-      onProgress: async (progress: any) => {
+      onProgress: async (progress: MultipartUploadProgress) => {
         const percent = progress.totalBytes > 0 
           ? Math.round((progress.uploadedBytes / progress.totalBytes) * 100)
           : 0;

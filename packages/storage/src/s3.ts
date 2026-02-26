@@ -699,12 +699,20 @@ type DeserializationContext = {
   bucket: string;
 };
 
+type HiddenResponse = {
+  statusCode?: number;
+  status?: number;
+  $metadata?: { httpStatusCode?: number };
+  headers?: unknown;
+  body?: unknown;
+};
+
 async function logDeserializationDiagnostics(error: unknown, context: DeserializationContext): Promise<void> {
   if (!looksLikeXmlDeserializationError(error)) {
     return;
   }
 
-  const response = getHiddenResponse(error);
+  const response = getHiddenResponse(error) as HiddenResponse | undefined;
   const statusCode =
     response?.statusCode ??
     response?.status ??
@@ -730,11 +738,16 @@ function looksLikeXmlDeserializationError(error: unknown): boolean {
   return /deserialization error|expected closing tag|xml/i.test(error.message);
 }
 
-function getHiddenResponse(error: unknown): any {
+function getHiddenResponse(error: unknown): unknown {
   if (!error || typeof error !== "object") {
     return undefined;
   }
-  return (error as any).$response;
+
+  if (!("$response" in error)) {
+    return undefined;
+  }
+
+  return (error as { $response?: unknown }).$response;
 }
 
 function sanitizeHeaders(headers: unknown): Record<string, string> | undefined {
@@ -764,7 +777,10 @@ async function getBodySnippet(body: unknown, limit = 512): Promise<string | unde
     let size = 0;
     try {
       for await (const chunk of body as AsyncIterable<unknown>) {
-        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as any);
+        const buffer = toBuffer(chunk);
+        if (!buffer) {
+          continue;
+        }
         const remaining = limit - size;
         if (remaining <= 0) break;
         chunks.push(buffer.subarray(0, remaining));
@@ -777,4 +793,28 @@ async function getBodySnippet(body: unknown, limit = 512): Promise<string | unde
     }
   }
   return undefined;
+}
+
+function toBuffer(value: unknown): Buffer | null {
+  if (Buffer.isBuffer(value)) {
+    return value;
+  }
+
+  if (value instanceof Uint8Array) {
+    return Buffer.from(value);
+  }
+
+  if (typeof value === "string") {
+    return Buffer.from(value);
+  }
+
+  if (value instanceof ArrayBuffer) {
+    return Buffer.from(value);
+  }
+
+  if (ArrayBuffer.isView(value)) {
+    return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  }
+
+  return null;
 }

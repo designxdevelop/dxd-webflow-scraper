@@ -1,5 +1,8 @@
 # DXD Webflow Scraper - Architecture Design
 
+> Note: this file contains historical planning notes from an earlier architecture phase.
+> For the active implementation, use `ARCHITECTURE_CURRENT.md`.
+
 ## Executive Summary
 
 This document outlines the architecture for **dxd-webflow-scraper**, a web application that provides a UI dashboard for managing and executing Webflow site scraping jobs. It builds upon the proven crawling logic from pdc-scraper while adding multi-site management, job scheduling, real-time progress tracking, and flexible storage options.

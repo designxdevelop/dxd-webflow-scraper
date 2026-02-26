@@ -15,6 +15,7 @@
       "dependencies": {
         "@auth/core": "^0.34.3",
         "@auth/drizzle-adapter": "^1.11.1",
+        "@dxd/db": "workspace:*",
         "@dxd/storage": "workspace:*",
         "@hono/auth-js": "^1.1.0",
         "@hono/node-server": "^1.14.1",
@@ -53,6 +54,7 @@
       "devDependencies": {
         "@tailwindcss/vite": "^4.1.8",
         "@tanstack/router-plugin": "^1.120.4",
+        "@types/node": "^22.0.0",
         "@types/react": "^19.1.6",
         "@types/react-dom": "^19.1.5",
         "@vitejs/plugin-react": "^4.5.0",
@@ -61,11 +63,25 @@
         "vite": "^6.3.5",
       },
     },
+    "packages/db": {
+      "name": "@dxd/db",
+      "version": "1.0.0",
+      "dependencies": {
+        "@auth/core": "^0.34.3",
+        "drizzle-orm": "^0.44.2",
+        "postgres": "^3.4.7",
+      },
+      "devDependencies": {
+        "@types/node": "^22.0.0",
+        "typescript": "^5.9.3",
+      },
+    },
     "packages/scraper": {
       "name": "@dxd/scraper",
       "version": "1.0.0",
       "dependencies": {
         "cheerio": "^1.2.0",
+        "domhandler": "^5.0.3",
         "fast-xml-parser": "^5.3.3",
         "fs-extra": "^11.3.3",
         "p-limit": "^7.2.0",
@@ -93,6 +109,7 @@
       "name": "@dxd/worker",
       "version": "1.0.0",
       "dependencies": {
+        "@dxd/db": "workspace:*",
         "@dxd/scraper": "workspace:*",
         "@dxd/storage": "workspace:*",
         "archiver": "^7.0.1",
@@ -263,6 +280,8 @@
     "@drizzle-team/brocli": ["@drizzle-team/brocli@0.10.2", "", {}, "sha512-z33Il7l5dKjUgGULTqBsQBQwckHh5AbIuxhdsIxDDiZAzBOrZO6q9ogcWC65kU382AfynTfgNumVcNIjuIua6w=="],
 
     "@dxd/api": ["@dxd/api@workspace:apps/api"],
+
+    "@dxd/db": ["@dxd/db@workspace:packages/db"],
 
     "@dxd/scraper": ["@dxd/scraper@workspace:packages/scraper"],
 

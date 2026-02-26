@@ -24,6 +24,9 @@ dxd-webflow-scraper/
 │   └── worker/       # Background job processor
 ```
 
+- Current architecture reference: `ARCHITECTURE_CURRENT.md`
+- Historical design notes: `ARCHITECTURE.md`
+
 ## Tech Stack
 
 - **Frontend**: Vite, React, TanStack Router, TanStack Query, Tailwind CSS

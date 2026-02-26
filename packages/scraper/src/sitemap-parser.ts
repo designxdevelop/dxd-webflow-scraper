@@ -63,7 +63,7 @@ async function traverseSitemap(sitemapUrl: string, visited: Set<string>, urls: S
     return;
   }
 
-  let doc: any;
+  let doc: unknown;
   try {
     doc = parser.parse(text);
   } catch (error) {

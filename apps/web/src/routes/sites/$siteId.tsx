@@ -3,81 +3,9 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { sitesApi, crawlsApi } from "@/lib/api";
 import { formatToMountainTime } from "@/lib/date";
+import { parseCron, toCronExpression, type ScheduleFrequency, WEEKDAYS } from "@/lib/schedule";
 import { ArrowLeft, Play, ExternalLink, Trash2, Download, Save } from "lucide-react";
 import { useEffect, useState } from "react";
-
-type ScheduleFrequency = "daily" | "weekly" | "monthly";
-
-const WEEKDAYS = [
-  { label: "Sun", value: "0" },
-  { label: "Mon", value: "1" },
-  { label: "Tue", value: "2" },
-  { label: "Wed", value: "3" },
-  { label: "Thu", value: "4" },
-  { label: "Fri", value: "5" },
-  { label: "Sat", value: "6" },
-];
-
-function toCronExpression(frequency: ScheduleFrequency, time: string, days: string[], monthlyDay?: string): string | null {
-  const [hourString, minuteString] = time.split(":");
-  const hour = Number.parseInt(hourString, 10);
-  const minute = Number.parseInt(minuteString, 10);
-
-  if (Number.isNaN(hour) || Number.isNaN(minute)) {
-    return null;
-  }
-
-  // Convert from Mountain Time to UTC (UTC = MT + 7 hours)
-  const utcHour = (hour + 7) % 24;
-
-  if (frequency === "daily") {
-    return `${minute} ${utcHour} * * *`;
-  }
-
-  if (frequency === "monthly") {
-    const dayOfMonth = monthlyDay || "1";
-    return `${minute} ${utcHour} ${dayOfMonth} * *`;
-  }
-
-  const dayList = days.length > 0 ? days.join(",") : "1";
-  return `${minute} ${utcHour} * * ${dayList}`;
-}
-
-function parseCron(cron: string | null): {
-  frequency: ScheduleFrequency;
-  time: string;
-  days: string[];
-  monthlyDay: string;
-} {
-  if (!cron) {
-    return { frequency: "daily", time: "05:00", days: ["1"], monthlyDay: "1" };
-  }
-
-  const parts = cron.split(" ");
-  if (parts.length < 5) {
-    return { frequency: "daily", time: "05:00", days: ["1"], monthlyDay: "1" };
-  }
-
-  const [minute, hourStr, dayOfMonth, , dayOfWeek] = parts;
-  
-  // Convert UTC hour from cron back to Mountain Time (MT = UTC - 7)
-  const utcHour = Number.parseInt(hourStr, 10);
-  const mtHour = (utcHour - 7 + 24) % 24;
-  
-  const time = `${String(mtHour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
-
-  // If dayOfMonth is not "*" and dayOfWeek is "*", it's monthly
-  if (dayOfMonth !== "*" && dayOfWeek === "*") {
-    return { frequency: "monthly", time, days: ["1"], monthlyDay: dayOfMonth };
-  }
-
-  if (dayOfWeek === "*") {
-    return { frequency: "daily", time, days: ["1"], monthlyDay: "1" };
-  }
-
-  const days = dayOfWeek.split(",").filter(Boolean);
-  return { frequency: "weekly", time, days: days.length > 0 ? days : ["1"], monthlyDay: "1" };
-}
 
 export const Route = createFileRoute("/sites/$siteId")({
   component: SiteDetailPage,

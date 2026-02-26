@@ -2,46 +2,10 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { sitesApi, type CreateSiteInput } from "@/lib/api";
+import { toCronExpression, type ScheduleFrequency, WEEKDAYS } from "@/lib/schedule";
 import { useState } from "react";
 import { ArrowLeft, Plus } from "lucide-react";
 import { Link } from "@tanstack/react-router";
-
-type ScheduleFrequency = "daily" | "weekly" | "monthly";
-
-const WEEKDAYS = [
-  { label: "Sun", value: "0" },
-  { label: "Mon", value: "1" },
-  { label: "Tue", value: "2" },
-  { label: "Wed", value: "3" },
-  { label: "Thu", value: "4" },
-  { label: "Fri", value: "5" },
-  { label: "Sat", value: "6" },
-];
-
-function toCronExpression(frequency: ScheduleFrequency, time: string, days: string[], monthlyDay?: string): string | null {
-  const [hourString, minuteString] = time.split(":");
-  const hour = Number.parseInt(hourString, 10);
-  const minute = Number.parseInt(minuteString, 10);
-
-  if (Number.isNaN(hour) || Number.isNaN(minute)) {
-    return null;
-  }
-
-  // Convert from Mountain Time to UTC (UTC = MT + 7 hours)
-  const utcHour = (hour + 7) % 24;
-
-  if (frequency === "daily") {
-    return `${minute} ${utcHour} * * *`;
-  }
-
-  if (frequency === "monthly") {
-    const dayOfMonth = monthlyDay || "1";
-    return `${minute} ${utcHour} ${dayOfMonth} * *`;
-  }
-
-  const dayList = days.length > 0 ? days.join(",") : "1";
-  return `${minute} ${utcHour} * * ${dayList}`;
-}
 
 export const Route = createFileRoute("/sites/new")({
   component: NewSitePage,

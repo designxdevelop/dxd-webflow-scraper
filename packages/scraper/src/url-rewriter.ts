@@ -1,4 +1,5 @@
 import { load, CheerioAPI, Cheerio } from "cheerio";
+import type { AnyNode } from "domhandler";
 import path from "node:path";
 import { AssetDownloader } from "./asset-downloader.js";
 import { log } from "./logger.js";
@@ -170,7 +171,7 @@ async function processImages($: CheerioAPI, pageUrl: string, assets: AssetDownlo
   );
 }
 
-async function rewriteSrcset($el: Cheerio<any>, pageUrl: string, assets: AssetDownloader) {
+async function rewriteSrcset($el: Cheerio<AnyNode>, pageUrl: string, assets: AssetDownloader) {
   const srcset = $el.attr("srcset");
   if (!srcset) return;
 
@@ -724,7 +725,7 @@ async function processInlineStyles($: CheerioAPI, pageUrl: string, assets: Asset
   );
 }
 
-function removeIntegrity($el: Cheerio<any>) {
+function removeIntegrity($el: Cheerio<AnyNode>) {
   if ($el.attr("integrity")) {
     $el.removeAttr("integrity");
   }

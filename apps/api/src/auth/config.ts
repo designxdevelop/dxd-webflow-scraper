@@ -98,7 +98,8 @@ export function getAuthConfigFactory(db: Database, options: AuthConfigOptions) {
               .from(users)
               .where(eq(users.id, user.id))
               .limit(1);
-            (session.user as any).role = dbUser[0]?.role || "user";
+            const sessionUser = session.user as typeof session.user & { role?: string };
+            sessionUser.role = dbUser[0]?.role || "user";
           }
           return session;
         },

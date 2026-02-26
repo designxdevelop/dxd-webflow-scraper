@@ -14,10 +14,12 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "bun test src/*.test.ts"
   },
   "dependencies": {
     "cheerio": "^1.2.0",
+    "domhandler": "^5.0.3",
     "fast-xml-parser": "^5.3.3",
     "fs-extra": "^11.3.3",
     "p-limit": "^7.2.0",

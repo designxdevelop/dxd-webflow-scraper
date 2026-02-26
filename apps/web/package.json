@@ -7,7 +7,8 @@
     "build": "tsc -b && vite build",
     "start": "node server.mjs",
     "preview": "vite preview",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "bun test src/lib"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.80.6",
@@ -23,6 +24,7 @@
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.8",
     "@tanstack/router-plugin": "^1.120.4",
+    "@types/node": "^22.0.0",
     "@types/react": "^19.1.6",
     "@types/react-dom": "^19.1.5",
     "@vitejs/plugin-react": "^4.5.0",

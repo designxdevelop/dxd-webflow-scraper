@@ -1,7 +1,6 @@
-import {
-  createDbClient as createSharedDbClient,
-  type Database,
-} from "@dxd/db/client";
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
+import * as schema from "./schema.js";
 
 /**
  * Create a Drizzle database client from a connection string.
@@ -9,10 +8,11 @@ import {
  * In Node: connectionString comes from process.env.DATABASE_URL
  */
 export function createDbClient(connectionString: string) {
-  return createSharedDbClient(connectionString);
+  const client = postgres(connectionString);
+  return drizzle(client, { schema });
 }
 
-export type { Database };
+export type Database = ReturnType<typeof createDbClient>;
 
 // ---------------------------------------------------------------------------
 // Legacy singleton for backward compat during migration.

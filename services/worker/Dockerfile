@@ -1,4 +1,4 @@
-FROM oven/bun:latest
+FROM oven/bun:1.3.10
 
 WORKDIR /app
 
@@ -11,6 +11,7 @@ COPY apps/api/package.json apps/api/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/scraper/package.json packages/scraper/package.json
 COPY packages/storage/package.json packages/storage/package.json
+COPY packages/db/package.json packages/db/package.json
 COPY services/worker/package.json services/worker/package.json
 
 RUN bun install --frozen-lockfile

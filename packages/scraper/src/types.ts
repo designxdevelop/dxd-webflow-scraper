@@ -2,6 +2,13 @@ export type AssetCategory = "css" | "js" | "image" | "font" | "media" | "html";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
+export interface MemorySnapshot {
+  rssBytes: number;
+  heapUsedBytes: number;
+  externalBytes: number;
+  arrayBuffersBytes: number;
+}
+
 export interface CrawlProgress {
   total: number;
   succeeded: number;
@@ -72,6 +79,11 @@ export interface CrawlOptions {
   shouldAbort?: () => boolean | Promise<boolean>;
   onProgress?: (progress: CrawlProgress) => void | Promise<void>;
   onLog?: (level: LogLevel, message: string, url?: string) => void | Promise<void>;
+  onMemorySnapshot?: (
+    label: string,
+    snapshot: MemorySnapshot,
+    peakRssBytes: number
+  ) => void | Promise<void>;
 }
 
 export interface PageResult {

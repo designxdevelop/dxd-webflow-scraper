@@ -42,7 +42,7 @@ async function checkScheduledCrawls() {
       const existing = await db.query.crawls.findFirst({
         where: and(
           eq(crawls.siteId, site.id),
-          inArray(crawls.status, ["pending", "running", "uploading"])
+          inArray(crawls.status, ["pending", "running", "archiving", "uploading"])
         ),
       });
 

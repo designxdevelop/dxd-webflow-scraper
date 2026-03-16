@@ -190,7 +190,7 @@ app.post("/:id/cancel", async (c) => {
     return c.json({ error: "Crawl not found" }, 404);
   }
 
-  if (crawl.status !== "pending" && crawl.status !== "running" && crawl.status !== "uploading") {
+  if (crawl.status !== "pending" && crawl.status !== "running" && crawl.status !== "archiving" && crawl.status !== "uploading") {
     return c.json({ error: "Crawl cannot be cancelled" }, 400);
   }
 

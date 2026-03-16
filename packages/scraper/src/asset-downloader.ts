@@ -1,9 +1,12 @@
 import crypto from "node:crypto";
+import nodeFs from "node:fs";
+import { once } from "node:events";
 import path from "node:path";
 import fs from "fs-extra";
 import { AssetCategory } from "./types.js";
 import { log } from "./logger.js";
 import type { AssetCache } from "./asset-cache.js";
+import { readPositiveIntEnv } from "./concurrency.js";
 
 const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".avif", ".ico"]);
 const FONT_EXTS = new Set([".woff2", ".woff", ".ttf", ".otf", ".eot"]);
@@ -45,20 +48,6 @@ const DEFAULT_GLOBAL_DOWNLOAD_BLACKLIST = [
 ];
 const CRAWL_ABORT_MESSAGE = "Crawl cancelled by request.";
 
-function readPositiveIntEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (!raw) {
-    return fallback;
-  }
-
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return fallback;
-  }
-
-  return parsed;
-}
-
 export class AssetDownloader {
   private cache = new Map<string, string>();
   private directPathCache = new Map<string, string>();
@@ -69,11 +58,15 @@ export class AssetDownloader {
   private diskCache: AssetCache | null;
   private shouldAbort?: () => boolean | Promise<boolean>;
   private readonly fetchTimeoutMs: number;
+  private readonly maxBinaryAssetBytes: number;
+  private readonly maxMediaAssetBytes: number;
 
   constructor(private outputDir: string, diskCache?: AssetCache, options?: AssetDownloaderOptions) {
     this.diskCache = diskCache ?? null;
     this.shouldAbort = options?.shouldAbort;
     this.fetchTimeoutMs = readPositiveIntEnv("ASSET_FETCH_TIMEOUT_MS", 20000);
+    this.maxBinaryAssetBytes = readOptionalByteLimitEnv("CRAWL_MAX_BINARY_ASSET_BYTES");
+    this.maxMediaAssetBytes = readOptionalByteLimitEnv("CRAWL_MAX_MEDIA_ASSET_BYTES");
     this.blacklist = normalizeBlacklist([
       ...DEFAULT_GLOBAL_DOWNLOAD_BLACKLIST,
       ...(options?.globalDownloadBlacklist ?? []),
@@ -119,55 +112,65 @@ export class AssetDownloader {
       // B6: Check disk cache before network fetch
       if (this.diskCache && category !== "css" && category !== "js") {
         // Only cache binary assets — CSS/JS need URL rewriting which is context-dependent
-        const cached = await this.diskCache.get(normalized);
-        if (cached) {
-          const contentType = null;
-          relativePath = await this.writeBinaryAsset(cached, normalized, category, contentType);
+        const cachedPath = await this.diskCache.getPath(normalized);
+        if (cachedPath) {
+          relativePath = await this.writeBinaryAssetFromPath(cachedPath, normalized, category, null);
           const webPath = `/${relativePath.replace(/\\+/g, "/")}`;
           this.cache.set(normalized, webPath);
           return webPath;
         }
       }
 
-      const res = await this.fetchWithTimeout(normalized, {
-        redirect: "follow",
-        headers: {
-          "user-agent":
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-          accept: "*/*",
-        },
-      });
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
-
-      if (category === "css") {
-        await this.assertNotAborted();
-        let cssContent = await res.text();
-        cssContent = await this.rewriteCssUrls(cssContent, normalized);
-        relativePath = this.buildRelativePath(normalized, "css", ".css");
-        const cssDir = path.posix.dirname(relativePath);
-        cssContent = this.rewriteArchiveRootPathsInCss(cssContent, cssDir);
-        await this.writeTextAssetByRelativePath(relativePath, cssContent);
-      } else if (category === "js") {
-        await this.assertNotAborted();
-        let jsContent = await res.text();
-        jsContent = await this.rewriteJsUrls(jsContent, normalized);
-        relativePath = this.buildRelativePath(normalized, "js", ".js");
-        const jsDir = path.posix.dirname(relativePath);
-        jsContent = this.rewriteArchiveRootPathsInJs(jsContent, jsDir);
-        await this.writeTextAssetByRelativePath(relativePath, jsContent);
-      } else {
-        await this.assertNotAborted();
-        const contentType = res.headers.get("content-type");
-        const buffer = Buffer.from(await res.arrayBuffer());
-        relativePath = await this.writeBinaryAsset(buffer, normalized, category, contentType);
-
-        // B6: Write binary assets to disk cache for future crawls
-        if (this.diskCache) {
-          await this.diskCache.put(normalized, buffer).catch(() => {});
+      const sizeLimitBytes = this.getSizeLimitBytes(category);
+      if (sizeLimitBytes > 0) {
+        const headContentLength = await this.fetchHeadContentLength(normalized);
+        if (headContentLength !== null && headContentLength > sizeLimitBytes) {
+          this.logLargeAssetSkip(normalized, category, headContentLength, sizeLimitBytes, "head");
+          return normalized;
         }
       }
+
+      relativePath = await this.fetchWithTimeout(normalized, {
+        redirect: "follow",
+        headers: buildAssetRequestHeaders("*/*"),
+      }, async (res, controller) => {
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+
+        if (category === "css") {
+          await this.assertNotAborted();
+          let cssContent = await res.text();
+          cssContent = await this.rewriteCssUrls(cssContent, normalized);
+          const cssRelativePath = this.buildRelativePath(normalized, "css", ".css");
+          const cssDir = path.posix.dirname(cssRelativePath);
+          cssContent = this.rewriteArchiveRootPathsInCss(cssContent, cssDir);
+          await this.writeTextAssetByRelativePath(cssRelativePath, cssContent);
+          return cssRelativePath;
+        }
+
+        if (category === "js") {
+          await this.assertNotAborted();
+          let jsContent = await res.text();
+          jsContent = await this.rewriteJsUrls(jsContent, normalized);
+          const jsRelativePath = this.buildRelativePath(normalized, "js", ".js");
+          const jsDir = path.posix.dirname(jsRelativePath);
+          jsContent = this.rewriteArchiveRootPathsInJs(jsContent, jsDir);
+          await this.writeTextAssetByRelativePath(jsRelativePath, jsContent);
+          return jsRelativePath;
+        }
+
+        const binaryResult = await this.writeBinaryAssetFromResponse(res, normalized, category, controller, sizeLimitBytes);
+        if (!binaryResult) {
+          return normalized;
+        }
+
+        if (this.diskCache) {
+          await this.diskCache.putFromFile(normalized, binaryResult.diskPath).catch(() => {});
+        }
+
+        return binaryResult.relativePath;
+      });
     } catch (error) {
       if (this.isAbortError(error)) {
         throw error;
@@ -206,23 +209,20 @@ export class AssetDownloader {
     }
 
     await this.assertNotAborted();
-    const res = await this.fetchWithTimeout(normalized, {
+    await this.fetchWithTimeout(normalized, {
       redirect: "follow",
-      headers: {
-        "user-agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-        accept: "*/*",
-      },
+      headers: buildAssetRequestHeaders("*/*"),
+    }, async (res, controller) => {
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+
+      const diskPath = path.join(this.outputDir, safeRelativePath);
+      await fs.ensureDir(path.dirname(diskPath));
+      await this.assertNotAborted();
+      await this.streamResponseBodyToFile(res, diskPath, controller, 0, normalized, "media");
+      return null;
     });
-
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
-    }
-
-    const diskPath = path.join(this.outputDir, safeRelativePath);
-    await fs.ensureDir(path.dirname(diskPath));
-    await this.assertNotAborted();
-    await fs.writeFile(diskPath, Buffer.from(await res.arrayBuffer()));
 
     const webPath = `/${safeRelativePath}`;
     this.directPathCache.set(cacheKey, webPath);
@@ -267,6 +267,53 @@ export class AssetDownloader {
     await fs.ensureDir(path.dirname(diskPath));
     await fs.writeFile(diskPath, buffer);
     return relativePath;
+  }
+
+  private async writeBinaryAssetFromPath(
+    sourcePath: string,
+    assetUrl: string,
+    category: AssetCategory,
+    contentType: string | null
+  ): Promise<string> {
+    const fallbackExt = this.categoryFallbackExt(category);
+    const contentTypeExt = mimeTypeToExt(contentType);
+    const relativePath = this.buildRelativePath(assetUrl, category, fallbackExt, contentTypeExt);
+    const diskPath = path.join(this.outputDir, relativePath);
+    await fs.ensureDir(path.dirname(diskPath));
+    await fs.copyFile(sourcePath, diskPath);
+    return relativePath;
+  }
+
+  private async writeBinaryAssetFromResponse(
+    res: Response,
+    assetUrl: string,
+    category: AssetCategory,
+    controller: AbortController,
+    sizeLimitBytes: number
+  ): Promise<{ relativePath: string; diskPath: string } | null> {
+    const contentType = res.headers.get("content-type");
+    const fallbackExt = this.categoryFallbackExt(category);
+    const contentTypeExt = mimeTypeToExt(contentType);
+    const relativePath = this.buildRelativePath(assetUrl, category, fallbackExt, contentTypeExt);
+    const diskPath = path.join(this.outputDir, relativePath);
+    await fs.ensureDir(path.dirname(diskPath));
+
+    const contentLength = parseContentLength(res.headers.get("content-length"));
+    if (sizeLimitBytes > 0 && contentLength !== null && contentLength > sizeLimitBytes) {
+      this.logLargeAssetSkip(assetUrl, category, contentLength, sizeLimitBytes, "content-length");
+      return null;
+    }
+
+    try {
+      await this.streamResponseBodyToFile(res, diskPath, controller, sizeLimitBytes, assetUrl, category);
+      return { relativePath, diskPath };
+    } catch (error) {
+      await fs.rm(diskPath, { force: true }).catch(() => undefined);
+      if (error instanceof Error && error.message === "ASSET_TOO_LARGE") {
+        return null;
+      }
+      throw error;
+    }
   }
 
   private buildRelativePath(
@@ -338,7 +385,11 @@ export class AssetDownloader {
     return error instanceof Error && error.message.includes(CRAWL_ABORT_MESSAGE);
   }
 
-  private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+  private async fetchWithTimeout<T>(
+    url: string,
+    init: RequestInit,
+    consume: (response: Response, controller: AbortController) => Promise<T>
+  ): Promise<T> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort("timeout"), this.fetchTimeoutMs);
 
@@ -347,7 +398,7 @@ export class AssetDownloader {
         ...init,
         signal: controller.signal,
       });
-      return res;
+      return await consume(res, controller);
     } catch (error) {
       if (controller.signal.aborted) {
         throw new Error(`Asset download timeout after ${this.fetchTimeoutMs}ms: ${url}`);
@@ -355,6 +406,99 @@ export class AssetDownloader {
       throw error;
     } finally {
       clearTimeout(timeout);
+    }
+  }
+
+  private async fetchHeadContentLength(url: string): Promise<number | null> {
+    try {
+      return await this.fetchWithTimeout(url, {
+        method: "HEAD",
+        redirect: "follow",
+        headers: buildAssetRequestHeaders("*/*"),
+      }, async (res) => {
+        if (!res.ok) {
+          return null;
+        }
+
+        return parseContentLength(res.headers.get("content-length"));
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  private getSizeLimitBytes(category: AssetCategory): number {
+    if (category === "media") {
+      return this.maxMediaAssetBytes;
+    }
+
+    if (category === "image" || category === "font") {
+      return this.maxBinaryAssetBytes;
+    }
+
+    return 0;
+  }
+
+  private logLargeAssetSkip(
+    assetUrl: string,
+    category: AssetCategory,
+    sizeBytes: number,
+    limitBytes: number,
+    source: "head" | "content-length" | "stream"
+  ): void {
+    log.warn(
+      `Skipping ${category} asset ${assetUrl} because ${source} size ${formatByteSize(sizeBytes)} exceeds limit ${formatByteSize(limitBytes)}`,
+      assetUrl
+    );
+  }
+
+  private async streamResponseBodyToFile(
+    res: Response,
+    diskPath: string,
+    controller: AbortController,
+    sizeLimitBytes: number,
+    assetUrl: string,
+    category: AssetCategory
+  ): Promise<number> {
+    if (!res.body) {
+      throw new Error("Response body is not readable");
+    }
+
+    const writer = nodeFs.createWriteStream(diskPath);
+    const reader = res.body.getReader();
+    let writtenBytes = 0;
+
+    try {
+      while (true) {
+        await this.assertNotAborted();
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+
+        if (!value || value.byteLength === 0) {
+          continue;
+        }
+
+        writtenBytes += value.byteLength;
+        if (sizeLimitBytes > 0 && writtenBytes > sizeLimitBytes) {
+          controller.abort("asset-too-large");
+          this.logLargeAssetSkip(assetUrl, category, writtenBytes, sizeLimitBytes, "stream");
+          throw new Error("ASSET_TOO_LARGE");
+        }
+
+        if (!writer.write(value)) {
+          await once(writer, "drain");
+        }
+      }
+
+      await closeWriteStream(writer);
+      return writtenBytes;
+    } catch (error) {
+      writer.destroy(error as Error);
+      throw error;
+    } finally {
+      reader.releaseLock();
     }
   }
 
@@ -935,4 +1079,59 @@ function pickSafeExt(
 
   // For other categories, prefer URL ext if present.
   return ext || contentTypeExt || fallbackExt;
+}
+
+function buildAssetRequestHeaders(accept: string): HeadersInit {
+  return {
+    "user-agent":
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    accept,
+  };
+}
+
+function parseContentLength(value: string | null): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return null;
+  }
+
+  return parsed;
+}
+
+function readOptionalByteLimitEnv(name: string): number {
+  const raw = process.env[name];
+  if (!raw) {
+    return 0;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 0;
+  }
+
+  return parsed;
+}
+
+function formatByteSize(bytes: number): string {
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+async function closeWriteStream(writer: nodeFs.WriteStream): Promise<void> {
+  if (writer.destroyed) {
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    writer.end((error?: Error | null) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
 }

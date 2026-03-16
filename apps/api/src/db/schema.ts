@@ -119,7 +119,7 @@ export const crawls = pgTable("crawls", {
   id: uuid("id").primaryKey().defaultRandom(),
   siteId: uuid("site_id").references(() => sites.id, { onDelete: "cascade" }),
 
-  // Status: pending, running, completed, failed, cancelled
+  // Status: pending, running, archiving, uploading, completed, timed_out, failed, cancelled
   status: varchar("status", { length: 50 }).default("pending"),
   startedAt: timestamp("started_at", { withTimezone: true }),
   completedAt: timestamp("completed_at", { withTimezone: true }),

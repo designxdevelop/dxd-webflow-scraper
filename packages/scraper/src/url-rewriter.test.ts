@@ -8,10 +8,16 @@ import { AssetDownloader } from "./asset-downloader.js";
 import { rewriteHtmlDocument } from "./url-rewriter.js";
 
 const originalFetch = globalThis.fetch;
+const originalAssetConcurrency = process.env.CRAWL_ASSET_CONCURRENCY;
 const createdTempDirs: string[] = [];
 
 afterEach(async () => {
   globalThis.fetch = originalFetch;
+  if (originalAssetConcurrency === undefined) {
+    delete process.env.CRAWL_ASSET_CONCURRENCY;
+  } else {
+    process.env.CRAWL_ASSET_CONCURRENCY = originalAssetConcurrency;
+  }
   await Promise.all(createdTempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
@@ -234,6 +240,52 @@ describe("rewriteHtmlDocument offline path normalization", () => {
     const cssContent = await fs.readFile(path.join(cssDir, cssFiles[0]), "utf8");
     assert.match(cssContent, /\.\.\/images\//);
     assert.doesNotMatch(cssContent, /url\(['"]?\/images\//);
+  });
+});
+
+describe("rewriteHtmlDocument bounded concurrency", () => {
+  it("limits per-page asset fanout with CRAWL_ASSET_CONCURRENCY", async () => {
+    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "dxd-url-rewriter-concurrency-"));
+    createdTempDirs.push(outputDir);
+    process.env.CRAWL_ASSET_CONCURRENCY = "2";
+
+    let activeFetches = 0;
+    let maxActiveFetches = 0;
+
+    globalThis.fetch = async (input: RequestInfo | URL): Promise<Response> => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      activeFetches += 1;
+      maxActiveFetches = Math.max(maxActiveFetches, activeFetches);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      activeFetches -= 1;
+      return new Response(new Uint8Array([0, 1, 2]), {
+        status: 200,
+        headers: {
+          "content-type": url.endsWith(".js") ? "application/javascript" : "image/png",
+        },
+      });
+    };
+
+    const assets = new AssetDownloader(outputDir);
+    await assets.init();
+
+    await rewriteHtmlDocument({
+      html: `
+        <html><body>
+          <script src="/js/a.js"></script>
+          <script src="/js/b.js"></script>
+          <script src="/js/c.js"></script>
+          <img src="/images/1.png" />
+          <img src="/images/2.png" />
+          <img src="/images/3.png" />
+        </body></html>
+      `,
+      pageUrl: "https://example.com/",
+      assets,
+      removeWebflowBadge: false,
+    });
+
+    assert.ok(maxActiveFetches <= 2, `expected at most 2 concurrent fetches, saw ${maxActiveFetches}`);
   });
 });
 

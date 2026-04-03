@@ -14,6 +14,7 @@ export type {
   LogLevel,
   PageResult,
   DynamicContentDetection,
+  MemorySnapshot,
 } from "./types.js";
 
 // Utilities (for advanced usage)
@@ -23,6 +24,7 @@ export { rewriteHtmlDocument } from "./url-rewriter.js";
 export { processPage, buildRelativeFilePath, detectDynamicContent } from "./page-processor.js";
 export { extractLinks } from "./link-extractor.js";
 export { setLogCallback } from "./logger.js";
+export { captureMemorySnapshot, formatMemoryBytes, formatMemorySnapshot } from "./memory.js";
 export {
   getStateFilePath,
   loadState,
@@ -30,3 +32,4 @@ export {
   updateStateProgress,
   filterUrlsForResume,
 } from "./state-manager.js";
+export { CrawlCancelledError, CrawlTimeoutError } from "./crawl-errors.js";

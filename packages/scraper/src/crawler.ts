@@ -1,5 +1,6 @@
 import path from "node:path";
 import os from "node:os";
+import nodeFs from "node:fs/promises";
 import fs from "fs-extra";
 import { chromium, Browser, BrowserContext } from "playwright";
 import { fetchSitemapUrls } from "./sitemap-parser.js";
@@ -8,6 +9,7 @@ import { AssetCache } from "./asset-cache.js";
 import { processPage } from "./page-processor.js";
 import { CrawlOptions, CrawlResult, CrawlState, CrawlProgress } from "./types.js";
 import { log, runWithLogCallback } from "./logger.js";
+import { captureMemorySnapshot, formatMemoryBytes, formatMemorySnapshot } from "./memory.js";
 import { writeOutputConfig } from "./output-config.js";
 import {
   getStateFilePath,
@@ -16,10 +18,12 @@ import {
   filterUrlsForResume,
 } from "./state-manager.js";
 import { extractLinks } from "./link-extractor.js";
+import { CrawlCancelledError, CrawlTimeoutError } from "./crawl-errors.js";
 
 const CRAWL_ABORT_MESSAGE = "Crawl cancelled by request.";
 // Configurable batch size for state persistence - smaller = more frequent writes but safer against crashes
 const STATE_FLUSH_BATCH_SIZE = readPositiveInt("CRAWL_STATE_FLUSH_BATCH_SIZE", 25);
+const DEFAULT_MEMORY_LOG_EVERY_PAGES = 25;
 
 function readPositiveInt(envVar: string, fallback: number): number {
   const raw = process.env[envVar];
@@ -30,17 +34,55 @@ function readPositiveInt(envVar: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-async function withTimeout<T>(fn: () => Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  return Promise.race([
-    fn(),
-    new Promise<T>((_, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error(`${label} timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
-      // Clean up timer if promise resolves first
-      timer.unref?.();
-    }),
-  ]);
+function combineAbortSignals(signals: AbortSignal[]): AbortSignal {
+  if (signals.length === 1) {
+    return signals[0]!;
+  }
+  if (typeof AbortSignal.any === "function") {
+    return AbortSignal.any(signals);
+  }
+  const combined = new AbortController();
+  for (const sig of signals) {
+    if (sig.aborted) {
+      combined.abort(sig.reason);
+      return combined.signal;
+    }
+    sig.addEventListener(
+      "abort",
+      () => {
+        combined.abort(sig.reason);
+      },
+      { once: true }
+    );
+  }
+  return combined.signal;
+}
+
+async function withTimeout<T>(
+  fn: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+  label: string,
+  parentSignal?: AbortSignal
+): Promise<T> {
+  const timeoutController = new AbortController();
+  let timer: ReturnType<typeof setTimeout>;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      timeoutController.abort();
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    timer.unref?.();
+  });
+  const signals = [timeoutController.signal];
+  if (parentSignal) {
+    signals.push(parentSignal);
+  }
+  const combined = combineAbortSignals(signals);
+  try {
+    return await Promise.race([fn(combined), timeoutPromise]);
+  } finally {
+    clearTimeout(timer!);
+  }
 }
 
 async function shouldAbort(options: CrawlOptions): Promise<boolean> {
@@ -54,12 +96,26 @@ async function shouldAbort(options: CrawlOptions): Promise<boolean> {
 }
 
 async function assertNotAborted(options: CrawlOptions): Promise<void> {
-  if (await shouldAbort(options)) {
+  if (options.signal?.aborted) {
+    const reason = options.signal.reason;
+    if (reason instanceof CrawlCancelledError || reason instanceof CrawlTimeoutError) {
+      throw reason;
+    }
+    throw new Error(CRAWL_ABORT_MESSAGE);
+  }
+  if (!options.shouldAbort) {
+    return;
+  }
+  const aborted = await options.shouldAbort();
+  if (aborted) {
     throw new Error(CRAWL_ABORT_MESSAGE);
   }
 }
 
 function isAbortError(error: unknown): boolean {
+  if (error instanceof CrawlCancelledError || error instanceof CrawlTimeoutError) {
+    return true;
+  }
   if (!(error instanceof Error)) {
     return false;
   }
@@ -78,6 +134,173 @@ function isPlaywrightClosedError(error: unknown): boolean {
     msg.includes("target closed") ||
     msg.includes("browser disconnected")
   );
+}
+
+export interface ContainerMemoryInfo {
+  limitBytes: number | null;
+  source: "cgroup-v2" | "cgroup-v1" | "host";
+}
+
+export interface CrawlRuntimePlan {
+  effectiveConcurrency: number;
+  numBrowsers: number;
+  concurrencyPerBrowser: number;
+  availableMemoryBytes: number;
+  memorySource: "container" | "host";
+  containerLimitBytes: number | null;
+  processRssBytes: number;
+  rssSafetyCapApplied: boolean;
+}
+
+export interface CrawlRuntimePlanInput {
+  requestedConcurrency: number;
+  configuredMaxConcurrency: number;
+  cpuCount: number;
+  hostFreeMemoryBytes: number;
+  processRssBytes: number;
+  containerLimitBytes: number | null;
+  memoryBufferBytes: number;
+  memoryBytesPerPage: number;
+  memoryBytesPerBrowser: number;
+  pagesPerBrowser: number;
+  disableResourceChecks: boolean;
+  overrideConcurrency: number;
+  overrideBrowsers: number;
+  rssSafetyThresholdPercent: number;
+}
+
+export function calculateCrawlRuntimePlan(input: CrawlRuntimePlanInput): CrawlRuntimePlan {
+  const {
+    requestedConcurrency,
+    configuredMaxConcurrency,
+    cpuCount,
+    hostFreeMemoryBytes,
+    processRssBytes,
+    containerLimitBytes,
+    memoryBufferBytes,
+    memoryBytesPerPage,
+    memoryBytesPerBrowser,
+    pagesPerBrowser,
+    disableResourceChecks,
+    overrideConcurrency,
+    overrideBrowsers,
+    rssSafetyThresholdPercent,
+  } = input;
+
+  if (overrideConcurrency > 0 && overrideBrowsers > 0) {
+    return {
+      effectiveConcurrency: overrideConcurrency,
+      numBrowsers: overrideBrowsers,
+      concurrencyPerBrowser: Math.max(1, Math.ceil(overrideConcurrency / overrideBrowsers)),
+      availableMemoryBytes: hostFreeMemoryBytes,
+      memorySource: containerLimitBytes ? "container" : "host",
+      containerLimitBytes,
+      processRssBytes,
+      rssSafetyCapApplied: false,
+    };
+  }
+
+  const hostAvailableBytes = Math.max(memoryBytesPerPage, hostFreeMemoryBytes - memoryBufferBytes);
+  const containerAvailableBytes =
+    containerLimitBytes && Number.isFinite(containerLimitBytes)
+      ? Math.max(memoryBytesPerPage, containerLimitBytes - processRssBytes - memoryBufferBytes)
+      : null;
+  const availableMemoryBytes = containerAvailableBytes === null
+    ? hostAvailableBytes
+    : Math.min(hostAvailableBytes, containerAvailableBytes);
+  const memorySource = containerAvailableBytes === null ? "host" : "container";
+
+  const maxConcurrencyByMemory = Math.max(1, Math.floor(availableMemoryBytes / Math.max(1, memoryBytesPerPage)));
+  let effectiveConcurrency = disableResourceChecks
+    ? Math.min(requestedConcurrency, configuredMaxConcurrency)
+    : Math.max(
+        1,
+        Math.min(requestedConcurrency, configuredMaxConcurrency, cpuCount * 2, maxConcurrencyByMemory)
+      );
+
+  let rssSafetyCapApplied = false;
+  if (!disableResourceChecks && containerLimitBytes && Number.isFinite(containerLimitBytes)) {
+    const rssSafetyCeilingBytes = Math.max(
+      memoryBytesPerPage,
+      Math.floor(containerLimitBytes * clampPercent(rssSafetyThresholdPercent))
+    );
+    const remainingSafetyBytes = Math.max(memoryBytesPerPage, rssSafetyCeilingBytes - processRssBytes);
+    const maxConcurrencyBySafety = Math.max(1, Math.floor(remainingSafetyBytes / Math.max(1, memoryBytesPerPage)));
+    const nextConcurrency = Math.min(effectiveConcurrency, maxConcurrencyBySafety);
+    rssSafetyCapApplied = nextConcurrency < effectiveConcurrency;
+    effectiveConcurrency = nextConcurrency;
+  }
+
+  const maxBrowsersByMemory = Math.max(1, Math.floor(availableMemoryBytes / Math.max(1, memoryBytesPerBrowser)));
+  const maxBrowsersByCPU = Math.max(1, Math.floor(cpuCount));
+  const desiredBrowsers = effectiveConcurrency >= 4 ? Math.max(2, Math.ceil(effectiveConcurrency / pagesPerBrowser)) : 1;
+
+  const numBrowsers = overrideBrowsers > 0
+    ? overrideBrowsers
+    : disableResourceChecks
+      ? desiredBrowsers
+      : Math.max(1, Math.min(desiredBrowsers, maxBrowsersByCPU, maxBrowsersByMemory));
+
+  return {
+    effectiveConcurrency,
+    numBrowsers,
+    concurrencyPerBrowser: Math.max(1, Math.ceil(effectiveConcurrency / numBrowsers)),
+    availableMemoryBytes,
+    memorySource,
+    containerLimitBytes,
+    processRssBytes,
+    rssSafetyCapApplied,
+  };
+}
+
+export async function readContainerMemoryInfo(
+  fileReader: (filePath: string) => Promise<string> = async (filePath) => nodeFs.readFile(filePath, "utf8")
+): Promise<ContainerMemoryInfo> {
+  const candidates: Array<{ path: string; source: ContainerMemoryInfo["source"] }> = [
+    { path: "/sys/fs/cgroup/memory.max", source: "cgroup-v2" },
+    { path: "/sys/fs/cgroup/memory/memory.limit_in_bytes", source: "cgroup-v1" },
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      const value = parseContainerMemoryLimit(await fileReader(candidate.path));
+      if (value !== null) {
+        return { limitBytes: value, source: candidate.source };
+      }
+    } catch {
+      // Ignore unreadable cgroup files.
+    }
+  }
+
+  return { limitBytes: null, source: "host" };
+}
+
+export function parseContainerMemoryLimit(raw: string): number | null {
+  const normalized = raw.trim();
+  if (!normalized || normalized === "max") {
+    return null;
+  }
+
+  const parsed = Number.parseInt(normalized, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+
+  if (parsed >= Number.MAX_SAFE_INTEGER) {
+    return null;
+  }
+
+  return parsed;
+}
+
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    return 0.85;
+  }
+  if (value >= 1) {
+    return 0.99;
+  }
+  return value;
 }
 
 export function resolveCrawlSource(
@@ -191,36 +414,54 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
     const startedAt = Date.now();
     const resolvedOutput = path.resolve(options.outputDir);
     const statePath = getStateFilePath(resolvedOutput, options.stateFile);
+    const memoryLogEveryPages = readPositiveInt("CRAWL_MEMORY_LOG_EVERY_PAGES", DEFAULT_MEMORY_LOG_EVERY_PAGES);
+    let peakRssBytes = 0;
 
-    await assertNotAborted(options);
+    const recordMemorySnapshot = async (
+      label: string,
+      extra?: Record<string, string | number | boolean | null | undefined>
+    ): Promise<void> => {
+      const snapshot = captureMemorySnapshot();
+      peakRssBytes = Math.max(peakRssBytes, snapshot.rssBytes);
+      log.info(formatMemorySnapshot(label, snapshot, peakRssBytes, extra));
+      await options.onMemorySnapshot?.(label, snapshot, peakRssBytes);
+    };
 
-    // Load existing state if resuming
-    let state: CrawlState | null = null;
-    if (options.resume || options.retryFailed) {
-      state = await loadState(statePath);
-      if (state && state.baseUrl !== options.baseUrl) {
-        log.warn(`State file contains different baseUrl (${state.baseUrl}), ignoring state`);
-        state = null;
+    try {
+      await assertNotAborted(options);
+      await recordMemorySnapshot("crawl start", { baseUrl: options.baseUrl });
+
+      // Load existing state if resuming
+      let state: CrawlState | null = null;
+      if (options.resume || options.retryFailed) {
+        state = await loadState(statePath);
+        if (state && state.baseUrl !== options.baseUrl) {
+          log.warn(`State file contains different baseUrl (${state.baseUrl}), ignoring state`);
+          state = null;
+        }
       }
-    }
 
-    // Only empty directory if not resuming
-    if (!options.resume && !options.retryFailed) {
-      await fs.emptyDir(resolvedOutput);
-      if (await fs.pathExists(statePath)) {
-        await fs.remove(statePath);
+      // Only empty directory if not resuming
+      if (!options.resume && !options.retryFailed) {
+        await fs.emptyDir(resolvedOutput);
+        if (await fs.pathExists(statePath)) {
+          await fs.remove(statePath);
+        }
       }
-    }
 
-    await assertNotAborted(options);
-    log.info(`Resolving sitemap for ${options.baseUrl}`);
-    const sitemapUrls = await fetchSitemapUrls(options.baseUrl);
-    const crawlSource = resolveCrawlSource(options.baseUrl, sitemapUrls, options);
-    if (crawlSource.usedFallback) {
-      log.warn(
-        `No sitemap URLs discovered for ${options.baseUrl}; falling back to homepage seed + link discovery`
-      );
-    }
+      await assertNotAborted(options);
+      log.info(`Resolving sitemap for ${options.baseUrl}`);
+      const sitemapUrls = await fetchSitemapUrls(options.baseUrl);
+      const crawlSource = resolveCrawlSource(options.baseUrl, sitemapUrls, options);
+      await recordMemorySnapshot("after sitemap resolution", {
+        sitemapUrls: sitemapUrls.length,
+        usedSitemap: crawlSource.usedSitemap,
+      });
+      if (crawlSource.usedFallback) {
+        log.warn(
+          `No sitemap URLs discovered for ${options.baseUrl}; falling back to homepage seed + link discovery`
+        );
+      }
 
     // Filter URLs based on exclude patterns
     let filteredUrls = crawlSource.seedUrls;
@@ -232,171 +473,153 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
       }
     }
 
-    const allPages = options.maxPages ? filteredUrls.slice(0, options.maxPages) : filteredUrls;
-    const pages = filterUrlsForResume(
-      allPages,
-      state,
-      options.resume ?? false,
-      options.retryFailed ?? false
-    );
-
-    if (pages.length === 0) {
-      log.info("No URLs to process (all already completed or no failed URLs to retry).");
-      return {
-        total: allPages.length,
-        succeeded: state?.succeeded.length ?? 0,
-        failed: state?.failed.length ?? 0,
-        durationMs: Date.now() - startedAt,
-      };
-    }
-
-    const sourceLabel = crawlSource.usedSitemap ? "sitemap" : "homepage seed";
-    log.info(`Found ${pages.length} URLs to crawl (${allPages.length} total from ${sourceLabel}).`);
-
-    if (!state) {
-      state = {
-        baseUrl: options.baseUrl,
-        outputDir: resolvedOutput,
-        succeeded: [],
-        failed: [],
-        lastUpdated: Date.now(),
-      };
-    }
-
-    const assetCacheEnabled = process.env.ASSET_CACHE_ENABLED === "true";
-    let assetCache: AssetCache | undefined;
-    if (assetCacheEnabled) {
-      // Cross-crawl asset cache scoped by hostname for isolation
-      const cacheDir = options.assetCacheDir ?? path.join(
-        process.env.LOCAL_TEMP_PATH || "/tmp",
-        "dxd-asset-cache",
-        new URL(options.baseUrl).hostname,
-      );
-      assetCache = new AssetCache(cacheDir);
-      await assetCache.init();
-      log.info(`Asset cache enabled at ${cacheDir}`);
-    } else {
-      log.info("Asset cache disabled (set ASSET_CACHE_ENABLED=true to enable)");
-    }
-
-    const assetDownloader = new AssetDownloader(resolvedOutput, assetCache, {
-      downloadBlacklist: options.downloadBlacklist,
-      globalDownloadBlacklist: options.globalDownloadBlacklist,
-      shouldAbort: options.shouldAbort,
-    });
-    await assetDownloader.init();
-
-    const freeMemoryGB = os.freemem() / 1024 ** 3;
-    const cpuCount = os.cpus().length;
-    const configuredMaxConcurrency = readPositiveInt("MAX_CRAWL_CONCURRENCY", 30);
-    const requestedConcurrency = Math.max(1, options.concurrency);
-
-    // Resource calculation parameters (overrideable via env)
-    const memoryBufferGB = readPositiveInt("CRAWL_MEMORY_BUFFER_GB", 15) / 10; // Default 1.5GB
-    const memoryMBPerPage = readPositiveInt("CRAWL_MEMORY_MB_PER_PAGE", 150);
-    const memoryMBPerBrowser = readPositiveInt("CRAWL_MEMORY_MB_PER_BROWSER", 350);
-
-    // Dynamic boost: override concurrency and browsers via env
-    const overrideConcurrency = readPositiveInt("CRAWL_OVERRIDE_CONCURRENCY", 0);
-    const overrideBrowsers = readPositiveInt("CRAWL_OVERRIDE_BROWSERS", 0);
-    const disableResourceChecks = process.env.CRAWL_DISABLE_RESOURCE_CHECKS === "true";
-
-    let effectiveConcurrency: number;
-    let numBrowsers: number;
-
-    if (overrideConcurrency > 0 && overrideBrowsers > 0) {
-      // Fully manual override - bypass all resource checks
-      effectiveConcurrency = overrideConcurrency;
-      numBrowsers = overrideBrowsers;
-      log.info(
-        `CRAWL_OVERRIDE_CONCURRENCY=${overrideConcurrency}, CRAWL_OVERRIDE_BROWSERS=${overrideBrowsers} - bypassing resource checks`
-      );
-    } else {
-      // Calculate based on resources
-      const memoryGBPerPage = memoryMBPerPage / 1024;
-      const memoryGBPerBrowser = memoryMBPerBrowser / 1024;
-      const maxConcurrencyByMemory = Math.max(
-        1,
-        Math.floor(Math.max(0.5, freeMemoryGB - memoryBufferGB) / memoryGBPerPage)
+      const allPages = options.maxPages ? filteredUrls.slice(0, options.maxPages) : filteredUrls;
+      const pages = filterUrlsForResume(
+        allPages,
+        state,
+        options.resume ?? false,
+        options.retryFailed ?? false
       );
 
-      effectiveConcurrency = disableResourceChecks
-        ? Math.min(requestedConcurrency, configuredMaxConcurrency)
-        : Math.max(
-            1,
-            Math.min(
-              requestedConcurrency,
-              configuredMaxConcurrency,
-              cpuCount * 2,
-              maxConcurrencyByMemory
-            )
-          );
+      if (pages.length === 0) {
+        log.info("No URLs to process (all already completed or no failed URLs to retry).");
+        return {
+          total: allPages.length,
+          succeeded: state?.succeeded.length ?? 0,
+          failed: state?.failed.length ?? 0,
+          durationMs: Date.now() - startedAt,
+        };
+      }
+
+      const sourceLabel = crawlSource.usedSitemap ? "sitemap" : "homepage seed";
+      log.info(`Found ${pages.length} URLs to crawl (${allPages.length} total from ${sourceLabel}).`);
+
+      if (!state) {
+        state = {
+          baseUrl: options.baseUrl,
+          outputDir: resolvedOutput,
+          succeeded: [],
+          failed: [],
+          lastUpdated: Date.now(),
+        };
+      }
+
+      const assetCacheEnabled = process.env.ASSET_CACHE_ENABLED === "true";
+      let assetCache: AssetCache | undefined;
+      if (assetCacheEnabled) {
+        const cacheDir = options.assetCacheDir ?? path.join(
+          process.env.LOCAL_TEMP_PATH || "/tmp",
+          "dxd-asset-cache",
+          new URL(options.baseUrl).hostname,
+        );
+        assetCache = new AssetCache(cacheDir);
+        await assetCache.init();
+        log.info(`Asset cache enabled at ${cacheDir}`);
+      } else {
+        log.info("Asset cache disabled (set ASSET_CACHE_ENABLED=true to enable)");
+      }
+
+      const assetDownloader = new AssetDownloader(resolvedOutput, assetCache, {
+        downloadBlacklist: options.downloadBlacklist,
+        globalDownloadBlacklist: options.globalDownloadBlacklist,
+        shouldAbort: options.shouldAbort,
+      });
+      await assetDownloader.init();
+
+      const cpuCount = os.cpus().length;
+      const configuredMaxConcurrency = readPositiveInt("MAX_CRAWL_CONCURRENCY", 30);
+      const requestedConcurrency = Math.max(1, options.concurrency);
+
+      const memoryBufferBytes = readPositiveInt("CRAWL_MEMORY_BUFFER_GB", 15) * 1024 ** 3;
+      const memoryBytesPerPage = readPositiveInt("CRAWL_MEMORY_MB_PER_PAGE", 150) * 1024 ** 2;
+      const memoryBytesPerBrowser = readPositiveInt("CRAWL_MEMORY_MB_PER_BROWSER", 350) * 1024 ** 2;
+
+      const overrideConcurrency = readPositiveInt("CRAWL_OVERRIDE_CONCURRENCY", 0);
+      const overrideBrowsers = readPositiveInt("CRAWL_OVERRIDE_BROWSERS", 0);
+      const disableResourceChecks = process.env.CRAWL_DISABLE_RESOURCE_CHECKS === "true";
+      const pagesPerBrowser = readPositiveInt("CRAWL_PAGES_PER_BROWSER", 6);
+      const rssSafetyThresholdPercent = Number.parseFloat(process.env.CRAWL_RSS_SAFETY_THRESHOLD_PERCENT || "0.85");
+      const containerMemoryInfo = await readContainerMemoryInfo();
+      const runtimePlan = calculateCrawlRuntimePlan({
+        requestedConcurrency,
+        configuredMaxConcurrency,
+        cpuCount,
+        hostFreeMemoryBytes: os.freemem(),
+        processRssBytes: process.memoryUsage().rss,
+        containerLimitBytes: containerMemoryInfo.limitBytes,
+        memoryBufferBytes,
+        memoryBytesPerPage,
+        memoryBytesPerBrowser,
+        pagesPerBrowser,
+        disableResourceChecks,
+        overrideConcurrency,
+        overrideBrowsers,
+        rssSafetyThresholdPercent,
+      });
+      const effectiveConcurrency = runtimePlan.effectiveConcurrency;
+      const numBrowsers = runtimePlan.numBrowsers;
+      const concurrencyPerBrowser = runtimePlan.concurrencyPerBrowser;
 
       if (effectiveConcurrency < requestedConcurrency && !disableResourceChecks) {
         log.warn(
           `Crawl concurrency reduced from ${requestedConcurrency} to ${effectiveConcurrency} for stability`
         );
       }
-
-      const maxBrowsersByMemory = Math.max(
-        1,
-        Math.floor(Math.max(0.5, freeMemoryGB - memoryBufferGB) / memoryGBPerBrowser)
-      );
-      const maxBrowsersByCPU = Math.max(1, Math.floor(cpuCount));
-      const pagesPerBrowser = readPositiveInt("CRAWL_PAGES_PER_BROWSER", 6);
-      const desiredBrowsers =
-        effectiveConcurrency >= 4 ? Math.max(2, Math.ceil(effectiveConcurrency / pagesPerBrowser)) : 1;
-
-      if (overrideBrowsers > 0) {
-        numBrowsers = overrideBrowsers;
-      } else {
-        numBrowsers = disableResourceChecks
-          ? desiredBrowsers
-          : Math.max(1, Math.min(desiredBrowsers, maxBrowsersByCPU, maxBrowsersByMemory));
+      if (overrideConcurrency > 0 && overrideBrowsers > 0) {
+        log.info(
+          `CRAWL_OVERRIDE_CONCURRENCY=${overrideConcurrency}, CRAWL_OVERRIDE_BROWSERS=${overrideBrowsers} - bypassing resource checks`
+        );
       }
-    }
+      if (runtimePlan.rssSafetyCapApplied) {
+        log.warn("Crawl concurrency clamped because RSS is near the container memory ceiling");
+      }
 
-    const concurrencyPerBrowser = Math.max(1, Math.ceil(effectiveConcurrency / numBrowsers));
+      log.info(
+        `Runtime plan: ${cpuCount} CPUs, process RSS ${formatMemoryBytes(runtimePlan.processRssBytes)}, ` +
+          `${runtimePlan.memorySource} available memory ${formatMemoryBytes(runtimePlan.availableMemoryBytes)}, ` +
+          `container limit ${runtimePlan.containerLimitBytes ? formatMemoryBytes(runtimePlan.containerLimitBytes) : "unbounded"}. ` +
+          `Launching ${numBrowsers} browser(s) with ${concurrencyPerBrowser} pages each (${effectiveConcurrency} total concurrency)`
+      );
+      await recordMemorySnapshot("before browser launch", {
+        effectiveConcurrency,
+        browsers: numBrowsers,
+        memorySource: runtimePlan.memorySource,
+        containerSource: containerMemoryInfo.source,
+      });
 
-    log.info(
-      `System: ${cpuCount} CPUs, ${freeMemoryGB.toFixed(1)}GB free. ` +
-        `Launching ${numBrowsers} browser(s) with ${concurrencyPerBrowser} pages each ` +
-        `(${effectiveConcurrency} total concurrency)`
-    );
+      const scopedPages = new Set(allPages);
+      const resumedSucceeded = state.succeeded.filter((url) => scopedPages.has(url));
+      const resumedFailed = state.failed.filter((url) => scopedPages.has(url) && !resumedSucceeded.includes(url));
 
-    const scopedPages = new Set(allPages);
-    const resumedSucceeded = state.succeeded.filter((url) => scopedPages.has(url));
-    const resumedFailed = state.failed.filter((url) => scopedPages.has(url) && !resumedSucceeded.includes(url));
-
-    const browsers: Browser[] = [];
-    const contexts: BrowserContext[] = [];
-    const browserRecoveries: Array<Promise<void> | null> = [];
-    const pendingSucceeded: string[] = [];
-    const pendingFailed: string[] = [];
-    let processed = 0;
-    let succeededCount = resumedSucceeded.length;
-    let failedCount = resumedFailed.length;
+      const browsers: Browser[] = [];
+      const contexts: BrowserContext[] = [];
+      const browserRecoveries: Array<Promise<void> | null> = [];
+      const pendingSucceeded: string[] = [];
+      const pendingFailed: string[] = [];
+      let processed = 0;
+      let succeededCount = resumedSucceeded.length;
+      let failedCount = resumedFailed.length;
 
     // B2: Shared work queue — all browsers pull from a single pool
-    const visitedUrls = new Set<string>([...state.succeeded, ...state.failed]);
-    const urlQueue = [...pages];
-    let nextIndex = 0;
+      const visitedUrls = new Set<string>([...state.succeeded, ...state.failed]);
+      const urlQueue = [...pages];
+      let nextIndex = 0;
 
     // B7: Link discovery support
-    const sitemapOnly = crawlSource.sitemapOnly;
-    const discoverLinks = crawlSource.discoverLinks;
-    const maxTotalUrls = options.maxPages ?? Infinity;
-    const staticFastPath = options.staticFastPath !== false;
-    let staticPageCount = 0;
+      const sitemapOnly = crawlSource.sitemapOnly;
+      const discoverLinks = crawlSource.discoverLinks;
+      const maxTotalUrls = options.maxPages ?? Infinity;
+      const staticFastPath = options.staticFastPath !== false;
+      let staticPageCount = 0;
 
-    if (sitemapOnly && options.discoverLinks) {
-      log.info("sitemapOnly mode enabled — link discovery disabled");
-    }
-    if (staticFastPath) {
-      log.info("Static fast-path enabled — pages without dynamic content will skip Playwright");
-    }
+      if (sitemapOnly && options.discoverLinks) {
+        log.info("sitemapOnly mode enabled — link discovery disabled");
+      }
+      if (staticFastPath) {
+        log.info("Static fast-path enabled — pages without dynamic content will skip Playwright");
+      }
 
-    function getNextUrl(): string | null {
+      function getNextUrl(): string | null {
       while (nextIndex < urlQueue.length) {
         const url = urlQueue[nextIndex++];
         if (!visitedUrls.has(url)) {
@@ -407,7 +630,7 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
       return null;
     }
 
-    const flushStateProgress = async (force: boolean): Promise<void> => {
+      const flushStateProgress = async (force: boolean): Promise<void> => {
       if (!force && pendingSucceeded.length + pendingFailed.length < STATE_FLUSH_BATCH_SIZE) {
         return;
       }
@@ -419,12 +642,12 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
       await updateStateProgress(statePath, state!, succeededBatch, failedBatch);
     };
 
-    const reportProgress = async (currentUrl?: string): Promise<void> => {
+      const reportProgress = async (currentUrl?: string, totalOverride?: number): Promise<void> => {
       if (!options.onProgress) {
         return;
       }
       const progress: CrawlProgress = {
-        total: Math.max(allPages.length, urlQueue.length),
+        total: totalOverride ?? Math.max(allPages.length, urlQueue.length),
         succeeded: succeededCount,
         failed: failedCount,
         currentUrl,
@@ -432,11 +655,11 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
       await options.onProgress(progress);
     };
 
-    const maxRetries = readPositiveInt("CRAWL_PAGE_MAX_RETRIES", 2);
-    const retryBaseDelayMs = readPositiveInt("CRAWL_PAGE_RETRY_DELAY_MS", 2000);
-    const pageTimeoutMs = readPositiveInt("CRAWL_PAGE_TIMEOUT_MS", 120000); // 2 min per page max
+      const maxRetries = readPositiveInt("CRAWL_PAGE_MAX_RETRIES", 2);
+      const retryBaseDelayMs = readPositiveInt("CRAWL_PAGE_RETRY_DELAY_MS", 2000);
+      const pageTimeoutMs = readPositiveInt("CRAWL_PAGE_TIMEOUT_MS", 120000);
 
-    async function recoverBrowserContext(browserIndex: number): Promise<void> {
+      async function recoverBrowserContext(browserIndex: number): Promise<void> {
       if (browserRecoveries[browserIndex]) {
         await browserRecoveries[browserIndex];
         return;
@@ -465,7 +688,7 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
       }
     }
 
-    try {
+      try {
       for (let i = 0; i < numBrowsers; i++) {
         await assertNotAborted(options);
         const browser = await chromium.launch({ headless: true });
@@ -501,21 +724,24 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
               try {
                 // B3: Retry with exponential backoff + overall page timeout
                 const pageResult = await withRetry(
-                  () => withTimeout(
-                    () => processPage({
-                      url,
-                      context,
-                      outputDir: resolvedOutput,
-                      assets: assetDownloader,
-                      removeWebflowBadge: options.removeWebflowBadge ?? true,
-                      tryStaticFirst: staticFastPath,
-                      sitemapOnly,
-                      shouldAbort: options.shouldAbort,
-                      signal: options.signal,
-                    }),
-                    pageTimeoutMs,
-                    `Page processing for ${url}`
-                  ),
+                  () =>
+                    withTimeout(
+                      (pageSignal) =>
+                        processPage({
+                          url,
+                          context,
+                          outputDir: resolvedOutput,
+                          assets: assetDownloader,
+                          removeWebflowBadge: options.removeWebflowBadge ?? true,
+                          tryStaticFirst: staticFastPath,
+                          sitemapOnly,
+                          shouldAbort: options.shouldAbort,
+                          signal: pageSignal,
+                        }),
+                      pageTimeoutMs,
+                      `Page processing for ${url}`,
+                      options.signal
+                    ),
                   maxRetries,
                   retryBaseDelayMs,
                   url,
@@ -545,6 +771,15 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
                   }
                 }
 
+                if (position % memoryLogEveryPages === 0) {
+                  await recordMemorySnapshot("during crawl", {
+                    processed: position,
+                    queued: urlQueue.length,
+                    succeeded: succeededCount,
+                    failed: failedCount,
+                  });
+                }
+
                 if (position % 25 === 0 || position === pages.length) {
                   const inFlight = position - succeededCount - failedCount;
                   const inFlightMsg = inFlight > 0 ? `, ${inFlight} in progress` : "";
@@ -570,7 +805,7 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
           await Promise.all(workers);
         })
       );
-    } finally {
+      } finally {
       // B4: Close contexts, then browsers
       await Promise.all(
         contexts.map(async (ctx) => {
@@ -582,37 +817,60 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
           await browser.close().catch(() => undefined);
         })
       );
+      contexts.length = 0;
+      browsers.length = 0;
+      browserRecoveries.length = 0;
     }
 
-    await assertNotAborted(options);
-    await flushStateProgress(true);
-    await writeOutputConfig(resolvedOutput, options.redirectsCsv);
-    await reportProgress();
+      const finalTotalUrls = Math.max(allPages.length, urlQueue.length);
 
-    let cacheHitRate = "n/a";
-    if (assetCache) {
-      // Evict stale entries from the cross-crawl asset cache
-      await assetCache.evict();
-      const cacheStats = assetCache.getStats();
-      cacheHitRate = cacheStats.hitRate;
-      log.info(
-        `Asset cache: ${cacheStats.hits} hits, ${cacheStats.misses} misses (${cacheStats.hitRate} hit rate)`,
-      );
+      // Release crawl-scoped data structures before archiving
+      visitedUrls.clear();
+      urlQueue.length = 0;
+      scopedPages.clear();
+      pendingSucceeded.length = 0;
+      pendingFailed.length = 0;
+      assetDownloader.dispose();
+
+      await assertNotAborted(options);
+      await flushStateProgress(true);
+      await writeOutputConfig(resolvedOutput, options.redirectsCsv);
+      await reportProgress(undefined, finalTotalUrls);
+
+      let cacheHitRate = "n/a";
+      if (assetCache) {
+        await assetCache.evict();
+        const cacheStats = assetCache.getStats();
+        cacheHitRate = cacheStats.hitRate;
+        log.info(
+          `Asset cache: ${cacheStats.hits} hits, ${cacheStats.misses} misses (${cacheStats.hitRate} hit rate)`,
+        );
+      }
+
+      if (staticPageCount > 0) {
+        log.info(
+          `Static fast-path: ${staticPageCount}/${succeededCount} pages processed without Playwright`,
+        );
+      }
+      await recordMemorySnapshot("crawl complete", {
+        total: finalTotalUrls,
+        succeeded: succeededCount,
+        failed: failedCount,
+      });
+
+      return {
+        total: finalTotalUrls,
+        succeeded: succeededCount,
+        failed: failedCount,
+        durationMs: Date.now() - startedAt,
+        staticPages: staticPageCount,
+        cacheHitRate,
+      };
+    } catch (error) {
+      await recordMemorySnapshot("crawl failure", {
+        message: error instanceof Error ? error.message : "unknown-error",
+      });
+      throw error;
     }
-
-    if (staticPageCount > 0) {
-      log.info(
-        `Static fast-path: ${staticPageCount}/${succeededCount} pages processed without Playwright`,
-      );
-    }
-
-    return {
-      total: Math.max(allPages.length, urlQueue.length),
-      succeeded: succeededCount,
-      failed: failedCount,
-      durationMs: Date.now() - startedAt,
-      staticPages: staticPageCount,
-      cacheHitRate,
-    };
   });
 }

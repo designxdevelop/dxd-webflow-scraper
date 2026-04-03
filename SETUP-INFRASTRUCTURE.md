@@ -266,4 +266,13 @@ Bindings (in wrangler.toml):
 
 - `CRAWL_PAGE_MAX_RETRIES` — Max retries per page (default: 2)
 - `CRAWL_PAGE_RETRY_DELAY_MS` — Base delay for retry backoff (default: 2000)
-- `MAX_CRAWL_CONCURRENCY` — Max concurrent pages across all browsers (default: 10)
+- `MAX_SITE_CONCURRENCY` — Runtime cap for per-site crawl concurrency (recommended production cap: `3`-`5`)
+- `MAX_CRAWL_CONCURRENCY` — Max concurrent pages across all browsers (recommended production cap: `4`)
+- `CRAWL_ASSET_CONCURRENCY` — Max concurrent HTML rewrite asset downloads per page (default: `6`)
+- `CRAWL_PAGE_ASSET_CONCURRENCY` — Max concurrent dynamic page asset downloads (default: `6`)
+- `CRAWL_MAX_BINARY_ASSET_BYTES` — Skip very large image/font downloads when content length exceeds this byte limit
+- `CRAWL_MAX_MEDIA_ASSET_BYTES` — Skip very large media downloads when content length exceeds this byte limit
+- `CRAWL_MEMORY_LOG_EVERY_PAGES` — Emit a crawl memory snapshot every N processed pages (default: `25`)
+- `CRAWL_RSS_SAFETY_THRESHOLD_PERCENT` — Clamp effective concurrency once RSS reaches this share of the container limit (default: `0.85`)
+- `ARCHIVE_ZLIB_LEVEL` — ZIP compression level for crawl archives (default: `1`)
+- `WORKER_ARCHIVE_CONCURRENCY` — Concurrent archive jobs inside the worker service (default: `1`)

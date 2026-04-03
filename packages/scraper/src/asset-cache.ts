@@ -39,6 +39,20 @@ export class AssetCache {
    * Get cached content for a URL. Returns null on cache miss.
    */
   async get(url: string): Promise<Buffer | null> {
+    const filePath = await this.getPath(url);
+
+    if (!filePath) {
+      return null;
+    }
+
+    try {
+      return await fs.readFile(filePath);
+    } catch {
+      return null;
+    }
+  }
+
+  async getPath(url: string): Promise<string | null> {
     const key = this.keyFor(url);
     const filePath = this.pathFor(key);
 
@@ -48,7 +62,7 @@ export class AssetCache {
         // Touch the file to update mtime for LRU
         const now = new Date();
         await fs.utimes(filePath, now, now).catch(() => {});
-        return await fs.readFile(filePath);
+        return filePath;
       }
     } catch {
       // Cache miss
@@ -78,6 +92,18 @@ export class AssetCache {
       await fs.writeFile(filePath, content);
     } catch (error) {
       log.warn(`Failed to write to asset cache: ${(error as Error).message}`);
+    }
+  }
+
+  async putFromFile(url: string, sourcePath: string): Promise<void> {
+    const key = this.keyFor(url);
+    const filePath = this.pathFor(key);
+
+    try {
+      await fs.ensureDir(path.dirname(filePath));
+      await fs.copyFile(sourcePath, filePath);
+    } catch (error) {
+      log.warn(`Failed to write file to asset cache: ${(error as Error).message}`);
     }
   }
 

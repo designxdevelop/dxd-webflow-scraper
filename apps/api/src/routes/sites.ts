@@ -176,10 +176,10 @@ app.post("/:id/crawl", async (c) => {
   }
 
   const existing = await db.query.crawls.findFirst({
-    where: and(
-      eq(crawls.siteId, siteId),
-      inArray(crawls.status, ["pending", "running", "uploading"])
-    ),
+      where: and(
+        eq(crawls.siteId, siteId),
+        inArray(crawls.status, ["pending", "running", "archiving", "uploading"])
+      ),
   });
 
   if (existing) {

@@ -2,6 +2,7 @@ import path from "node:path";
 import fs from "fs-extra";
 import { BrowserContext } from "playwright";
 import { AssetDownloader } from "./asset-downloader.js";
+import { readPositiveIntEnv, runWithConcurrencyLimit } from "./concurrency.js";
 import { rewriteHtmlDocument } from "./url-rewriter.js";
 import { AssetCategory, CrawlProgress, DynamicContentDetection, PageResult } from "./types.js";
 import { log } from "./logger.js";
@@ -21,6 +22,8 @@ interface PageProcessorOptions {
   shouldAbort?: () => boolean | Promise<boolean>;
   onProgress?: (progress: Partial<CrawlProgress>) => void | Promise<void>;
 }
+
+const DEFAULT_PAGE_ASSET_CONCURRENCY = 6;
 
 /**
  * Scan raw HTML for indicators that the page requires JavaScript execution
@@ -173,8 +176,7 @@ export async function processPage(options: PageProcessorOptions): Promise<PageRe
   const requestedResources = new Set<string>();
   const resourceCategories = new Map<string, AssetCategory>();
 
-  // Intercept network responses to capture successfully loaded resources
-  page.on("response", (response) => {
+  const responseHandler = (response: import("playwright").Response) => {
     const responseUrl = response.url();
     const status = response.status();
 
@@ -197,7 +199,8 @@ export async function processPage(options: PageProcessorOptions): Promise<PageRe
     } catch {
       // Invalid URL, skip
     }
-  });
+  };
+  page.on("response", responseHandler);
 
   try {
     await assertNotCancelled();
@@ -227,22 +230,22 @@ export async function processPage(options: PageProcessorOptions): Promise<PageRe
     await triggerDynamicChunkLoading(page, url, requestedResources, resourceCategories, sitemapOnly);
 
     // Download all captured resources
-    const downloadPromises: Promise<void>[] = [];
-    for (const resourceUrl of requestedResources) {
-      const category = resourceCategories.get(resourceUrl) || inferCategoryFromUrl(resourceUrl);
-      if (category) {
-        downloadPromises.push(
-          assets
-            .downloadAsset(resourceUrl, category)
-            .then(() => {})
-            .catch((err) => {
-              log.warn(`Failed to download ${resourceUrl}: ${(err as Error).message}`, resourceUrl);
-            })
-        );
-      }
-    }
+    await runWithConcurrencyLimit(
+      Array.from(requestedResources),
+      readPositiveIntEnv("CRAWL_PAGE_ASSET_CONCURRENCY", DEFAULT_PAGE_ASSET_CONCURRENCY),
+      async (resourceUrl) => {
+        const category = resourceCategories.get(resourceUrl) || inferCategoryFromUrl(resourceUrl);
+        if (!category) {
+          return;
+        }
 
-    await Promise.all(downloadPromises);
+        try {
+          await assets.downloadAsset(resourceUrl, category);
+        } catch (err) {
+          log.warn(`Failed to download ${resourceUrl}: ${(err as Error).message}`, resourceUrl);
+        }
+      }
+    );
 
     await assertNotCancelled();
     const html = await page.content();
@@ -255,6 +258,9 @@ export async function processPage(options: PageProcessorOptions): Promise<PageRe
     // Return both the path and original HTML for link discovery
     return { relativePath, html, static: false };
   } finally {
+    page.removeListener("response", responseHandler);
+    requestedResources.clear();
+    resourceCategories.clear();
     await page.close();
   }
 }

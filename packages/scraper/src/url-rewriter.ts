@@ -2,6 +2,7 @@ import { load, CheerioAPI, Cheerio } from "cheerio";
 import type { AnyNode } from "domhandler";
 import path from "node:path";
 import { AssetDownloader } from "./asset-downloader.js";
+import { readPositiveIntEnv, runWithConcurrencyLimit } from "./concurrency.js";
 import { log } from "./logger.js";
 
 interface RewriteOptions {
@@ -10,6 +11,8 @@ interface RewriteOptions {
   assets: AssetDownloader;
   removeWebflowBadge?: boolean;
 }
+
+const DEFAULT_ASSET_CONCURRENCY = 6;
 
 export async function rewriteHtmlDocument(options: RewriteOptions): Promise<string> {
   const { html, pageUrl, assets, removeWebflowBadge = true } = options;
@@ -86,89 +89,69 @@ function normalizeCloudflareScripts($: CheerioAPI) {
 
 async function processStylesheets($: CheerioAPI, pageUrl: string, assets: AssetDownloader) {
   const nodes = $('link[rel="stylesheet"], link[data-wf-page]');
-  await Promise.all(
-    nodes
-      .map(async (_, el) => {
-        const $el = $(el);
-        const href = absoluteUrl($el.attr("href"), pageUrl);
-        if (!href) return;
-        const localPath = await assets.downloadAsset(href, "css");
-        $el.attr("href", localPath);
-        removeIntegrity($el);
-      })
-      .get()
-  );
+  await processNodesWithAssetConcurrency(nodes.toArray(), async (el) => {
+    const $el = $(el);
+    const href = absoluteUrl($el.attr("href"), pageUrl);
+    if (!href) return;
+    const localPath = await assets.downloadAsset(href, "css");
+    $el.attr("href", localPath);
+    removeIntegrity($el);
+  });
 
   const preloadNodes = $('link[rel="preload"][as]');
-  await Promise.all(
-    preloadNodes
-      .map(async (_, el) => {
-        const $el = $(el);
-        const asType = ($el.attr("as") || "").toLowerCase();
-        const href = absoluteUrl($el.attr("href"), pageUrl);
-        if (!href) return;
-        if (asType === "style") {
-          const local = await assets.downloadAsset(href, "css");
-          $el.attr("href", local);
-          removeIntegrity($el);
-        } else if (asType === "script") {
-          const local = await assets.downloadAsset(href, "js");
-          $el.attr("href", local);
-          removeIntegrity($el);
-        } else if (asType === "image") {
-          const local = await assets.downloadAsset(href, "image");
-          $el.attr("href", local);
-          removeIntegrity($el);
-        } else if (asType === "font") {
-          const local = await assets.downloadAsset(href, "font");
-          $el.attr("href", local);
-          removeIntegrity($el);
-        }
-      })
-      .get()
-  );
+  await processNodesWithAssetConcurrency(preloadNodes.toArray(), async (el) => {
+    const $el = $(el);
+    const asType = ($el.attr("as") || "").toLowerCase();
+    const href = absoluteUrl($el.attr("href"), pageUrl);
+    if (!href) return;
+    if (asType === "style") {
+      const local = await assets.downloadAsset(href, "css");
+      $el.attr("href", local);
+      removeIntegrity($el);
+    } else if (asType === "script") {
+      const local = await assets.downloadAsset(href, "js");
+      $el.attr("href", local);
+      removeIntegrity($el);
+    } else if (asType === "image") {
+      const local = await assets.downloadAsset(href, "image");
+      $el.attr("href", local);
+      removeIntegrity($el);
+    } else if (asType === "font") {
+      const local = await assets.downloadAsset(href, "font");
+      $el.attr("href", local);
+      removeIntegrity($el);
+    }
+  });
 }
 
 async function processScripts($: CheerioAPI, pageUrl: string, assets: AssetDownloader) {
   const nodes = $("script[src]");
-  await Promise.all(
-    nodes
-      .map(async (_, el) => {
-        const $el = $(el);
-        const src = absoluteUrl($el.attr("src"), pageUrl);
-        if (!src) return;
-        const localPath = await assets.downloadAsset(src, "js");
-        $el.attr("src", localPath);
-        removeIntegrity($el);
-      })
-      .get()
-  );
+  await processNodesWithAssetConcurrency(nodes.toArray(), async (el) => {
+    const $el = $(el);
+    const src = absoluteUrl($el.attr("src"), pageUrl);
+    if (!src) return;
+    const localPath = await assets.downloadAsset(src, "js");
+    $el.attr("src", localPath);
+    removeIntegrity($el);
+  });
 }
 
 async function processImages($: CheerioAPI, pageUrl: string, assets: AssetDownloader) {
   const images = $("img[src]");
-  await Promise.all(
-    images
-      .map(async (_, el) => {
-        const $el = $(el);
-        const src = absoluteUrl($el.attr("src"), pageUrl);
-        if (!src) return;
-        const local = await assets.downloadAsset(src, "image");
-        $el.attr("src", local);
-        await rewriteSrcset($el, pageUrl, assets);
-      })
-      .get()
-  );
+  await processNodesWithAssetConcurrency(images.toArray(), async (el) => {
+    const $el = $(el);
+    const src = absoluteUrl($el.attr("src"), pageUrl);
+    if (!src) return;
+    const local = await assets.downloadAsset(src, "image");
+    $el.attr("src", local);
+    await rewriteSrcset($el, pageUrl, assets);
+  });
 
   const pictureSources = $("picture source[srcset]");
-  await Promise.all(
-    pictureSources
-      .map(async (_, el) => {
-        const $el = $(el);
-        await rewriteSrcset($el, pageUrl, assets);
-      })
-      .get()
-  );
+  await processNodesWithAssetConcurrency(pictureSources.toArray(), async (el) => {
+    const $el = $(el);
+    await rewriteSrcset($el, pageUrl, assets);
+  });
 }
 
 async function rewriteSrcset($el: Cheerio<AnyNode>, pageUrl: string, assets: AssetDownloader) {
@@ -180,71 +163,60 @@ async function rewriteSrcset($el: Cheerio<AnyNode>, pageUrl: string, assets: Ass
     .map((entry: string) => entry.trim())
     .filter(Boolean);
 
-  const rewritten: string[] = [];
-  for (const entry of entries) {
+  const rewritten: (string | undefined)[] = [];
+  await runWithConcurrencyLimit(entries, getAssetConcurrency(), async (entry, index) => {
     const [url, descriptor] = entry.split(/\s+/);
     const absolute = absoluteUrl(url, pageUrl);
-    if (!absolute) continue;
+    if (!absolute) return;
     const local = await assets.downloadAsset(absolute, "image");
-    rewritten.push(descriptor ? `${local} ${descriptor}` : local);
-  }
+    rewritten[index] = descriptor ? `${local} ${descriptor}` : local;
+  });
 
-  if (rewritten.length) {
-    $el.attr("srcset", rewritten.join(", "));
+  const dense = rewritten.filter((v): v is string => v !== undefined && v !== "");
+  if (dense.length) {
+    $el.attr("srcset", dense.join(", "));
   }
 }
 
 async function processMedia($: CheerioAPI, pageUrl: string, assets: AssetDownloader) {
   const mediaElements = $("video[src], audio[src]");
-  await Promise.all(
-    mediaElements
-      .map(async (_, el) => {
-        const $el = $(el);
-        const src = absoluteUrl($el.attr("src"), pageUrl);
-        if (!src) return;
-        const local = await assets.downloadAsset(src, "media");
-        $el.attr("src", local);
-        if ($el.is("video")) {
-          const poster = $el.attr("poster");
-          if (poster) {
-            const absPoster = absoluteUrl(poster, pageUrl);
-            if (absPoster) {
-              const posterPath = await assets.downloadAsset(absPoster, "image");
-              $el.attr("poster", posterPath);
-            }
-          }
+  await processNodesWithAssetConcurrency(mediaElements.toArray(), async (el) => {
+    const $el = $(el);
+    const src = absoluteUrl($el.attr("src"), pageUrl);
+    if (!src) return;
+    const local = await assets.downloadAsset(src, "media");
+    $el.attr("src", local);
+    if ($el.is("video")) {
+      const poster = $el.attr("poster");
+      if (poster) {
+        const absPoster = absoluteUrl(poster, pageUrl);
+        if (absPoster) {
+          const posterPath = await assets.downloadAsset(absPoster, "image");
+          $el.attr("poster", posterPath);
         }
-      })
-      .get()
-  );
+      }
+    }
+  });
 
   const sourceNodes = $("video source[src], audio source[src]");
-  await Promise.all(
-    sourceNodes
-      .map(async (_, el) => {
-        const $el = $(el);
-        const src = absoluteUrl($el.attr("src"), pageUrl);
-        if (!src) return;
-        const local = await assets.downloadAsset(src, "media");
-        $el.attr("src", local);
-      })
-      .get()
-  );
+  await processNodesWithAssetConcurrency(sourceNodes.toArray(), async (el) => {
+    const $el = $(el);
+    const src = absoluteUrl($el.attr("src"), pageUrl);
+    if (!src) return;
+    const local = await assets.downloadAsset(src, "media");
+    $el.attr("src", local);
+  });
 }
 
 async function processIcons($: CheerioAPI, pageUrl: string, assets: AssetDownloader) {
   const links = $('link[rel*="icon"], link[rel="apple-touch-icon"]');
-  await Promise.all(
-    links
-      .map(async (_, el) => {
-        const $el = $(el);
-        const href = absoluteUrl($el.attr("href"), pageUrl);
-        if (!href) return;
-        const local = await assets.downloadAsset(href, "image");
-        $el.attr("href", local);
-      })
-      .get()
-  );
+  await processNodesWithAssetConcurrency(links.toArray(), async (el) => {
+    const $el = $(el);
+    const href = absoluteUrl($el.attr("href"), pageUrl);
+    if (!href) return;
+    const local = await assets.downloadAsset(href, "image");
+    $el.attr("href", local);
+  });
 }
 
 async function processMetaImages($: CheerioAPI, pageUrl: string, assets: AssetDownloader) {
@@ -266,98 +238,79 @@ async function processMetaImages($: CheerioAPI, pageUrl: string, assets: AssetDo
     return false;
   });
 
-  await Promise.all(
-    metas
-      .map(async (_, el) => {
-        const $el = $(el);
-        const content = absoluteUrl($el.attr("content"), pageUrl);
-        if (!content) return;
-        const local = await assets.downloadAsset(content, "image");
-        $el.attr("content", local);
-      })
-      .get()
-  );
+  await processNodesWithAssetConcurrency(metas.toArray(), async (el) => {
+    const $el = $(el);
+    const content = absoluteUrl($el.attr("content"), pageUrl);
+    if (!content) return;
+    const local = await assets.downloadAsset(content, "image");
+    $el.attr("content", local);
+  });
 
   // Also handle legacy `link rel="image_src"` which some sites still use.
   const imageSrcLinks = $('link[rel="image_src"][href]');
-  await Promise.all(
-    imageSrcLinks
-      .map(async (_, el) => {
-        const $el = $(el);
-        const href = absoluteUrl($el.attr("href"), pageUrl);
-        if (!href) return;
-        const local = await assets.downloadAsset(href, "image");
-        $el.attr("href", local);
-      })
-      .get()
-  );
+  await processNodesWithAssetConcurrency(imageSrcLinks.toArray(), async (el) => {
+    const $el = $(el);
+    const href = absoluteUrl($el.attr("href"), pageUrl);
+    if (!href) return;
+    const local = await assets.downloadAsset(href, "image");
+    $el.attr("href", local);
+  });
 }
 
 async function processIframes($: CheerioAPI, pageUrl: string, assets: AssetDownloader) {
   const iframes = $("iframe[src]");
-  await Promise.all(
-    iframes
-      .map(async (_, el) => {
-        const $el = $(el);
-        const src = absoluteUrl($el.attr("src"), pageUrl);
-        if (!src) return;
+  await processNodesWithAssetConcurrency(iframes.toArray(), async (el) => {
+    const $el = $(el);
+    const src = absoluteUrl($el.attr("src"), pageUrl);
+    if (!src) return;
 
-        // Download iframe content as HTML and rewrite src to point to local copy
-        // Use 'media' category for HTML content or create a new category
-        // For now, treat iframe HTML as a special asset type
-        try {
-          const localPath = await assets.downloadAsset(src, "media");
-          $el.attr("src", localPath);
-        } catch (error) {
-          // If we can't download the iframe content, leave the original src
-          // The iframe will still try to load from the original source
-        }
-      })
-      .get()
-  );
+    try {
+      const localPath = await assets.downloadAsset(src, "media");
+      $el.attr("src", localPath);
+    } catch {
+      // Keep the original iframe URL when mirroring fails.
+    }
+  });
 }
 
 async function processCodeIslands($: CheerioAPI, pageUrl: string, assets: AssetDownloader) {
   const islands = $("code-island[data-loader]");
   if (!islands.length) return;
 
-  const moduleCache = new Map<string, string>();
+  const moduleCache = new Map<string, Promise<string>>();
 
-  await Promise.all(
-    islands
-      .map(async (_, el) => {
-        const $el = $(el);
-        const rawLoader = $el.attr("data-loader");
-        if (!rawLoader) return;
+  await processNodesWithAssetConcurrency(islands.toArray(), async (el) => {
+    const $el = $(el);
+    const rawLoader = $el.attr("data-loader");
+    if (!rawLoader) return;
 
-        const parsed = parseJsonAttribute(rawLoader);
-        if (!isRecord(parsed) || parsed.tag !== "FEDERATION") return;
+    const parsed = parseJsonAttribute(rawLoader);
+    if (!isRecord(parsed) || parsed.tag !== "FEDERATION") return;
 
-        const val = asRecord(parsed.val);
-        const clientModuleUrlValue = asString(val?.clientModuleUrl);
-        if (!clientModuleUrlValue || !val) return;
+    const val = asRecord(parsed.val);
+    const clientModuleUrlValue = asString(val?.clientModuleUrl);
+    if (!clientModuleUrlValue || !val) return;
 
-        const clientModuleUrl = absoluteUrl(clientModuleUrlValue, pageUrl);
-        if (!clientModuleUrl) return;
+    const clientModuleUrl = absoluteUrl(clientModuleUrlValue, pageUrl);
+    if (!clientModuleUrl) return;
 
-        try {
-          let localClientModuleUrl = moduleCache.get(clientModuleUrl);
-          if (!localClientModuleUrl) {
-            localClientModuleUrl = await mirrorFederatedModule(clientModuleUrl, assets);
-            moduleCache.set(clientModuleUrl, localClientModuleUrl);
-          }
+    try {
+      let pending = moduleCache.get(clientModuleUrl);
+      if (!pending) {
+        pending = mirrorFederatedModule(clientModuleUrl, assets);
+        moduleCache.set(clientModuleUrl, pending);
+      }
+      const localClientModuleUrl = await pending;
 
-          val.clientModuleUrl = localClientModuleUrl;
-          $el.attr("data-loader", JSON.stringify(parsed));
-        } catch (error) {
-          log.warn(
-            `Failed to mirror code component module ${clientModuleUrl}: ${(error as Error).message}`,
-            clientModuleUrl
-          );
-        }
-      })
-      .get()
-  );
+      val.clientModuleUrl = localClientModuleUrl;
+      $el.attr("data-loader", JSON.stringify(parsed));
+    } catch (error) {
+      log.warn(
+        `Failed to mirror code component module ${clientModuleUrl}: ${(error as Error).message}`,
+        clientModuleUrl
+      );
+    }
+  });
 }
 
 async function mirrorFederatedModule(clientModuleUrl: string, assets: AssetDownloader): Promise<string> {
@@ -381,7 +334,7 @@ async function mirrorFederatedModule(clientModuleUrl: string, assets: AssetDownl
 
   const rewrittenRefs = new Map<string, string>();
   const assetRefs = collectFederationAssetRefs(mfManifest);
-  for (const assetRef of assetRefs) {
+  await processNodesWithAssetConcurrency(assetRefs, async (assetRef) => {
     const absoluteAssetUrl = new URL(assetRef, remotePublicPath).toString();
     const { localAssetPath, manifestRef } = getLocalFederationAssetMapping(
       moduleBaseDir,
@@ -397,7 +350,7 @@ async function mirrorFederatedModule(clientModuleUrl: string, assets: AssetDownl
         absoluteAssetUrl
       );
     }
-  }
+  });
 
   rewriteFederationManifestAssetRefs(mfManifest, rewrittenRefs);
   wfManifest.entry = toDotRelativePath(localEntryRelativePath);
@@ -699,30 +652,35 @@ function asString(value: unknown): string | null {
 
 async function processInlineStyles($: CheerioAPI, pageUrl: string, assets: AssetDownloader) {
   const styleTags = $("style");
-  await Promise.all(
-    styleTags
-      .map(async (_, el) => {
-        const $el = $(el);
-        const css = $el.html();
-        if (!css) return;
-        const rewritten = await assets.rewriteInlineCss(css, pageUrl);
-        $el.text(rewritten);
-      })
-      .get()
-  );
+  await processNodesWithAssetConcurrency(styleTags.toArray(), async (el) => {
+    const $el = $(el);
+    const css = $el.html();
+    if (!css) return;
+    const rewritten = await assets.rewriteInlineCss(css, pageUrl);
+    $el.text(rewritten);
+  });
 
   const nodesWithStyle = $("[style]");
-  await Promise.all(
-    nodesWithStyle
-      .map(async (_, el) => {
-        const $el = $(el);
-        const style = $el.attr("style");
-        if (!style) return;
-        const rewritten = await assets.rewriteInlineCss(style, pageUrl);
-        $el.attr("style", rewritten);
-      })
-      .get()
-  );
+  await processNodesWithAssetConcurrency(nodesWithStyle.toArray(), async (el) => {
+    const $el = $(el);
+    const style = $el.attr("style");
+    if (!style) return;
+    const rewritten = await assets.rewriteInlineCss(style, pageUrl);
+    $el.attr("style", rewritten);
+  });
+}
+
+function getAssetConcurrency(): number {
+  return readPositiveIntEnv("CRAWL_ASSET_CONCURRENCY", DEFAULT_ASSET_CONCURRENCY);
+}
+
+async function processNodesWithAssetConcurrency<T>(
+  items: Iterable<T>,
+  worker: (item: T) => Promise<void>
+): Promise<void> {
+  await runWithConcurrencyLimit(items, getAssetConcurrency(), async (item) => {
+    await worker(item);
+  });
 }
 
 function removeIntegrity($el: Cheerio<AnyNode>) {

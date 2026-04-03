@@ -76,8 +76,21 @@ function createExclusiveRunner() {
       return await task();
     } finally {
       release();
+      tryForceGC();
     }
   };
+}
+
+function tryForceGC(): void {
+  try {
+    if (typeof globalThis.Bun !== "undefined" && typeof (globalThis.Bun as any).gc === "function") {
+      (globalThis.Bun as any).gc(true);
+    } else if (typeof globalThis.gc === "function") {
+      (globalThis.gc as () => void)();
+    }
+  } catch {
+    // GC not available
+  }
 }
 
 const runExclusiveWorkerJob = createExclusiveRunner();
@@ -176,15 +189,20 @@ async function withTimeout<T>(operation: Promise<T>, timeoutMs: number, label: s
     return operation;
   }
 
-  return await Promise.race([
-    operation,
-    new Promise<T>((_, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error(`${label} timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
-      timer.unref();
-    }),
-  ]);
+  let timer: ReturnType<typeof setTimeout>;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+        timer.unref();
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer!);
+  }
 }
 
 async function publishEvent(crawlId: string, event: object) {
@@ -486,9 +504,12 @@ async function uploadArchiveFromTempDir(
       .where(eq(crawls.id, crawlId));
 
     await fs.rm(outputDir, { recursive: true, force: true }).catch(() => undefined);
+    archive.removeAllListeners();
+    archive.destroy();
     return { archivePath, outputSize };
   } catch (error) {
     await storage.deleteDir(archivePath).catch(() => undefined);
+    archive.removeAllListeners();
     archive.destroy(error as Error);
     throw error;
   } finally {

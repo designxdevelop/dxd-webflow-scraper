@@ -184,6 +184,12 @@ export class AssetDownloader {
     return webPath;
   }
 
+  dispose(): void {
+    this.cache.clear();
+    this.directPathCache.clear();
+    this.blacklistLogCache.clear();
+  }
+
   async rewriteInlineCss(css: string, baseUrl: string): Promise<string> {
     return this.rewriteCssUrls(css, baseUrl);
   }

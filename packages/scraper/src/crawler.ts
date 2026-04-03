@@ -34,16 +34,20 @@ function readPositiveInt(envVar: string, fallback: number): number {
 }
 
 async function withTimeout<T>(fn: () => Promise<T>, timeoutMs: number, label: string): Promise<T> {
-  return Promise.race([
-    fn(),
-    new Promise<T>((_, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error(`${label} timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
-      // Clean up timer if promise resolves first
-      timer.unref?.();
-    }),
-  ]);
+  let timer: ReturnType<typeof setTimeout>;
+  try {
+    return await Promise.race([
+      fn(),
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer!);
+  }
 }
 
 async function shouldAbort(options: CrawlOptions): Promise<boolean> {
@@ -761,7 +765,18 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
           await browser.close().catch(() => undefined);
         })
       );
+      contexts.length = 0;
+      browsers.length = 0;
+      browserRecoveries.length = 0;
     }
+
+      // Release crawl-scoped data structures before archiving
+      visitedUrls.clear();
+      urlQueue.length = 0;
+      scopedPages.clear();
+      pendingSucceeded.length = 0;
+      pendingFailed.length = 0;
+      assetDownloader.dispose();
 
       await assertNotAborted(options);
       await flushStateProgress(true);

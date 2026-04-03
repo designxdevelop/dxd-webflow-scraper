@@ -176,8 +176,7 @@ export async function processPage(options: PageProcessorOptions): Promise<PageRe
   const requestedResources = new Set<string>();
   const resourceCategories = new Map<string, AssetCategory>();
 
-  // Intercept network responses to capture successfully loaded resources
-  page.on("response", (response) => {
+  const responseHandler = (response: import("playwright").Response) => {
     const responseUrl = response.url();
     const status = response.status();
 
@@ -200,7 +199,8 @@ export async function processPage(options: PageProcessorOptions): Promise<PageRe
     } catch {
       // Invalid URL, skip
     }
-  });
+  };
+  page.on("response", responseHandler);
 
   try {
     await assertNotCancelled();
@@ -258,6 +258,9 @@ export async function processPage(options: PageProcessorOptions): Promise<PageRe
     // Return both the path and original HTML for link discovery
     return { relativePath, html, static: false };
   } finally {
+    page.removeListener("response", responseHandler);
+    requestedResources.clear();
+    resourceCategories.clear();
     await page.close();
   }
 }

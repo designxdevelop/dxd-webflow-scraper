@@ -1,6 +1,6 @@
 import path from "node:path";
 import fs from "fs-extra";
-import { BrowserContext } from "playwright";
+import { Browser, BrowserContext } from "playwright";
 import { AssetDownloader } from "./asset-downloader.js";
 import { readPositiveIntEnv, runWithConcurrencyLimit } from "./concurrency.js";
 import { rewriteHtmlDocument } from "./url-rewriter.js";
@@ -9,8 +9,8 @@ import { log } from "./logger.js";
 
 interface PageProcessorOptions {
   url: string;
-  /** B4: Reuse a shared browser context instead of creating one per page. */
-  context: BrowserContext;
+  /** Create a fresh browser context for each dynamic page to avoid long-lived Chromium retention. */
+  browser: Browser;
   outputDir: string;
   assets: AssetDownloader;
   removeWebflowBadge?: boolean;
@@ -146,7 +146,7 @@ async function tryStaticPath(options: PageProcessorOptions): Promise<PageResult 
 }
 
 export async function processPage(options: PageProcessorOptions): Promise<PageResult> {
-  const { url, context, outputDir, assets, removeWebflowBadge = true, signal, shouldAbort } = options;
+  const { url, browser, outputDir, assets, removeWebflowBadge = true, signal, shouldAbort } = options;
   const tryStatic = options.tryStaticFirst !== false;
   const sitemapOnly = options.sitemapOnly !== false;
 
@@ -167,10 +167,8 @@ export async function processPage(options: PageProcessorOptions): Promise<PageRe
 
   await assertNotCancelled();
 
-  // B4: Create a new page within the shared context (much cheaper than a new context)
-  const page = await context.newPage();
-  page.setDefaultNavigationTimeout(90000);
-  page.setDefaultTimeout(90000);
+  let context: BrowserContext | null = null;
+  let page: Awaited<ReturnType<BrowserContext["newPage"]>> | null = null;
 
   // Track successfully loaded resources (only same-origin assets)
   const requestedResources = new Set<string>();
@@ -200,9 +198,14 @@ export async function processPage(options: PageProcessorOptions): Promise<PageRe
       // Invalid URL, skip
     }
   };
-  page.on("response", responseHandler);
 
   try {
+    context = await browser.newContext();
+    page = await context.newPage();
+    page.setDefaultNavigationTimeout(90000);
+    page.setDefaultTimeout(90000);
+    page.on("response", responseHandler);
+
     await assertNotCancelled();
 
     // B5: Smarter navigation waits — use domcontentloaded first, then bonus networkidle
@@ -258,10 +261,11 @@ export async function processPage(options: PageProcessorOptions): Promise<PageRe
     // Return both the path and original HTML for link discovery
     return { relativePath, html, static: false };
   } finally {
-    page.removeListener("response", responseHandler);
+    page?.removeListener("response", responseHandler);
     requestedResources.clear();
     resourceCategories.clear();
-    await page.close();
+    await page?.close().catch(() => undefined);
+    await context?.close().catch(() => undefined);
   }
 }
 

@@ -2,7 +2,7 @@ import path from "node:path";
 import os from "node:os";
 import nodeFs from "node:fs/promises";
 import fs from "fs-extra";
-import { chromium, Browser, BrowserContext } from "playwright";
+import { chromium, Browser } from "playwright";
 import { fetchSitemapUrls } from "./sitemap-parser.js";
 import { AssetDownloader } from "./asset-downloader.js";
 import { AssetCache } from "./asset-cache.js";
@@ -592,7 +592,6 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
       const resumedFailed = state.failed.filter((url) => scopedPages.has(url) && !resumedSucceeded.includes(url));
 
       const browsers: Browser[] = [];
-      const contexts: BrowserContext[] = [];
       const browserRecoveries: Array<Promise<void> | null> = [];
       const pendingSucceeded: string[] = [];
       const pendingFailed: string[] = [];
@@ -666,16 +665,12 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
       }
 
       const recovery = (async () => {
-        const oldContext = contexts[browserIndex];
         const oldBrowser = browsers[browserIndex];
 
-        await oldContext?.close().catch(() => undefined);
         await oldBrowser?.close().catch(() => undefined);
 
         const newBrowser = await chromium.launch({ headless: true });
-        const newContext = await newBrowser.newContext();
         browsers[browserIndex] = newBrowser;
-        contexts[browserIndex] = newContext;
 
         log.warn(`Recovered browser ${browserIndex + 1} after unexpected Playwright close.`);
       })();
@@ -693,15 +688,11 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
         await assertNotAborted(options);
         const browser = await chromium.launch({ headless: true });
         browsers.push(browser);
-        // B4: Create one context per browser and reuse it
-        const context = await browser.newContext();
-        contexts.push(context);
       }
 
       // B2: Shared work queue — each browser worker pulls from the same pool
       await Promise.all(
         browsers.map(async (_browser, browserIndex) => {
-          const context = contexts[browserIndex];
           const workerCount = Math.max(1, Math.min(concurrencyPerBrowser, urlQueue.length));
 
           const workers = Array.from({ length: workerCount }, async () => {
@@ -729,7 +720,7 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
                       (pageSignal) =>
                         processPage({
                           url,
-                          context,
+                          browser: browsers[browserIndex]!,
                           outputDir: resolvedOutput,
                           assets: assetDownloader,
                           removeWebflowBadge: options.removeWebflowBadge ?? true,
@@ -806,18 +797,11 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
         })
       );
       } finally {
-      // B4: Close contexts, then browsers
-      await Promise.all(
-        contexts.map(async (ctx) => {
-          await ctx.close().catch(() => undefined);
-        })
-      );
       await Promise.all(
         browsers.map(async (browser) => {
           await browser.close().catch(() => undefined);
         })
       );
-      contexts.length = 0;
       browsers.length = 0;
       browserRecoveries.length = 0;
     }

@@ -163,7 +163,7 @@ async function rewriteSrcset($el: Cheerio<AnyNode>, pageUrl: string, assets: Ass
     .map((entry: string) => entry.trim())
     .filter(Boolean);
 
-  const rewritten: string[] = [];
+  const rewritten: (string | undefined)[] = [];
   await runWithConcurrencyLimit(entries, getAssetConcurrency(), async (entry, index) => {
     const [url, descriptor] = entry.split(/\s+/);
     const absolute = absoluteUrl(url, pageUrl);
@@ -172,8 +172,9 @@ async function rewriteSrcset($el: Cheerio<AnyNode>, pageUrl: string, assets: Ass
     rewritten[index] = descriptor ? `${local} ${descriptor}` : local;
   });
 
-  if (rewritten.length) {
-    $el.attr("srcset", rewritten.join(", "));
+  const dense = rewritten.filter((v): v is string => v !== undefined && v !== "");
+  if (dense.length) {
+    $el.attr("srcset", dense.join(", "));
   }
 }
 
@@ -276,7 +277,7 @@ async function processCodeIslands($: CheerioAPI, pageUrl: string, assets: AssetD
   const islands = $("code-island[data-loader]");
   if (!islands.length) return;
 
-  const moduleCache = new Map<string, string>();
+  const moduleCache = new Map<string, Promise<string>>();
 
   await processNodesWithAssetConcurrency(islands.toArray(), async (el) => {
     const $el = $(el);
@@ -294,11 +295,12 @@ async function processCodeIslands($: CheerioAPI, pageUrl: string, assets: AssetD
     if (!clientModuleUrl) return;
 
     try {
-      let localClientModuleUrl = moduleCache.get(clientModuleUrl);
-      if (!localClientModuleUrl) {
-        localClientModuleUrl = await mirrorFederatedModule(clientModuleUrl, assets);
-        moduleCache.set(clientModuleUrl, localClientModuleUrl);
+      let pending = moduleCache.get(clientModuleUrl);
+      if (!pending) {
+        pending = mirrorFederatedModule(clientModuleUrl, assets);
+        moduleCache.set(clientModuleUrl, pending);
       }
+      const localClientModuleUrl = await pending;
 
       val.clientModuleUrl = localClientModuleUrl;
       $el.attr("data-loader", JSON.stringify(parsed));

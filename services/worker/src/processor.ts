@@ -1,7 +1,14 @@
 import { Worker, Job, Queue, UnrecoverableError } from "bullmq";
 import Redis from "ioredis";
-import { eq, and, inArray, lte, desc, isNotNull } from "drizzle-orm";
-import { crawlSite, type CrawlProgress, type LogLevel, type CrawlResult } from "@dxd/scraper";
+import { eq, and, inArray, lte, desc, isNotNull, notInArray } from "drizzle-orm";
+import {
+  crawlSite,
+  CrawlCancelledError,
+  CrawlTimeoutError,
+  type CrawlProgress,
+  type LogLevel,
+  type CrawlResult,
+} from "@dxd/scraper";
 import { getStorage } from "@dxd/storage";
 import type { MultipartUploadProgress } from "@dxd/storage/adapter";
 import { db, sites, crawls, crawlLogs, settings } from "./db.js";
@@ -105,20 +112,6 @@ async function readGlobalDownloadBlacklist(): Promise<string[]> {
     return value.filter((item): item is string => typeof item === "string");
   }
   return [];
-}
-
-class CrawlCancelledError extends Error {
-  constructor(message = "Crawl cancelled by user") {
-    super(message);
-    this.name = "CrawlCancelledError";
-  }
-}
-
-class CrawlTimeoutError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "CrawlTimeoutError";
-  }
 }
 
 function getArchivePath(crawlId: string): string {
@@ -346,9 +339,11 @@ async function uploadArchiveFromTempDir(
     zlibLevel?: number;
     onAfterArchive?: (archiveSize: number, sourceBytes: number) => Promise<void>;
     onAfterUpload?: (outputSize: number) => Promise<void>;
+    assertNotCancelled?: () => Promise<void>;
   }
 ): Promise<{ archivePath: string; outputSize: number }> {
   const archivePath = getArchivePath(crawlId);
+  await options?.assertNotCancelled?.();
   const sourceBytes = await getLocalDirectorySize(outputDir);
 
   if (sourceBytes <= 0) {
@@ -365,6 +360,8 @@ async function uploadArchiveFromTempDir(
   }
 
   const localArchivePath = path.join(outputDir, "__archive__.zip");
+
+  await options?.assertNotCancelled?.();
 
   await publishEvent(crawlId, {
     type: "progress",
@@ -410,15 +407,21 @@ async function uploadArchiveFromTempDir(
   });
 
   try {
-    for (const file of files) {
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]!;
+      if (i % 50 === 0) {
+        await options?.assertNotCancelled?.();
+      }
       const relativePath = path.relative(outputDir, file).replace(/\\/g, "/");
       archive.file(file, { name: relativePath });
     }
 
+    await options?.assertNotCancelled?.();
     await archive.finalize();
     await once(archiveOutput, "close");
 
     const archiveSize = (await fs.stat(localArchivePath)).size;
+    await options?.assertNotCancelled?.();
     await options?.onAfterArchive?.(archiveSize, sourceBytes);
     
     // Upload with progress tracking and throttling to prevent TCP_OVERWINDOW
@@ -431,6 +434,7 @@ async function uploadArchiveFromTempDir(
       totalSize: archiveSize,
       partDelayMs,
       onProgress: async (progress: MultipartUploadProgress) => {
+        await options?.assertNotCancelled?.();
         const percent = progress.totalBytes > 0 
           ? Math.round((progress.uploadedBytes / progress.totalBytes) * 100)
           : 0;
@@ -467,6 +471,7 @@ async function uploadArchiveFromTempDir(
       },
     };
 
+    await options?.assertNotCancelled?.();
     if (storage.uploadFile) {
       await storage.uploadFile(archivePath, localArchivePath, uploadOptions);
     } else {
@@ -474,7 +479,9 @@ async function uploadArchiveFromTempDir(
       await storage.writeStream(archivePath, archiveReadStream, uploadOptions);
     }
 
+    await options?.assertNotCancelled?.();
     const outputSize = await storage.getSize(archivePath);
+    await options?.assertNotCancelled?.();
     await options?.onAfterUpload?.(outputSize);
     
     // Final progress update (100%)
@@ -622,13 +629,26 @@ async function processArchiveJob(job: Job<ArchiveJobData>) {
       return;
     }
 
+    const assertArchiveCancellable = async (): Promise<void> => {
+      const latest = await db.query.crawls.findFirst({ where: eq(crawls.id, crawlId) });
+      if (!latest) {
+        throw new CrawlCancelledError("Crawl record deleted while archiving");
+      }
+      if (latest.status === "cancelled" || latest.status === "failed") {
+        throw new CrawlCancelledError(`Archive stopped: crawl status is ${latest.status}`);
+      }
+    };
+
     const zlibLevel = parseArchiveZlibLevel();
     const archiveUploadTimeoutMs = parsePositiveIntEnv("ARCHIVE_UPLOAD_TIMEOUT_MS", 600000);
     const outputDir = await storage.createTempDir(crawlId);
     const memoryLogger = createWorkerMemoryLogger(crawlId, (level, message) => publishLogAndPersist(crawlId, level, message));
 
     await memoryLogger.snapshot("before archive", { finalStatus, zlibLevel });
-    await db.update(crawls).set({ status: "archiving" }).where(eq(crawls.id, crawlId));
+    await db
+      .update(crawls)
+      .set({ status: "archiving" })
+      .where(and(eq(crawls.id, crawlId), notInArray(crawls.status, ["cancelled", "failed"])));
 
     const outputSizeBytes = await getLocalDirectorySize(outputDir);
     const sizeMB = (outputSizeBytes / 1024 / 1024).toFixed(1);
@@ -638,26 +658,45 @@ async function processArchiveJob(job: Job<ArchiveJobData>) {
       `Creating ZIP archive (${sizeMB}MB source, zlib level ${zlibLevel}, timeout ${Math.round(archiveUploadTimeoutMs / 60000)}min)`
     );
 
-    const { archivePath, outputSize } = await withTimeout(
-      uploadArchiveFromTempDir(crawlId, outputDir, {
-        zlibLevel,
-        onAfterArchive: async (archiveSize, sourceBytes) => {
-          await memoryLogger.snapshot("after archive", { archiveSizeBytes: archiveSize, sourceBytes });
-          await db.update(crawls).set({ status: "uploading" }).where(eq(crawls.id, crawlId));
-        },
-        onAfterUpload: async (uploadedSize) => {
-          await memoryLogger.snapshot("after upload", { uploadedSizeBytes: uploadedSize });
-        },
-      }),
-      archiveUploadTimeoutMs,
-      `Archive upload for crawl ${crawlId}`
-    );
+    let archivePath: string;
+    let outputSize: number;
+
+    try {
+      const uploaded = await withTimeout(
+        uploadArchiveFromTempDir(crawlId, outputDir, {
+          zlibLevel,
+          assertNotCancelled: assertArchiveCancellable,
+          onAfterArchive: async (archiveSize, sourceBytes) => {
+            await assertArchiveCancellable();
+            await memoryLogger.snapshot("after archive", { archiveSizeBytes: archiveSize, sourceBytes });
+            await db
+              .update(crawls)
+              .set({ status: "uploading" })
+              .where(and(eq(crawls.id, crawlId), notInArray(crawls.status, ["cancelled", "failed"])));
+          },
+          onAfterUpload: async (uploadedSize) => {
+            await assertArchiveCancellable();
+            await memoryLogger.snapshot("after upload", { uploadedSizeBytes: uploadedSize });
+          },
+        }),
+        archiveUploadTimeoutMs,
+        `Archive upload for crawl ${crawlId}`
+      );
+      archivePath = uploaded.archivePath;
+      outputSize = uploaded.outputSize;
+    } catch (error) {
+      if (error instanceof CrawlCancelledError) {
+        await publishLogAndPersist(crawlId, "warn", `Archive aborted: ${error.message}`);
+        return;
+      }
+      throw error;
+    }
 
     const totalPages = crawlResult?.total ?? crawl.totalPages ?? 0;
     const succeededPages = crawlResult?.succeeded ?? crawl.succeededPages ?? 0;
     const failedPages = crawlResult?.failed ?? crawl.failedPages ?? 0;
 
-    await db
+    const updatedRows = await db
       .update(crawls)
       .set({
         status: finalStatus,
@@ -669,7 +708,17 @@ async function processArchiveJob(job: Job<ArchiveJobData>) {
         failedPages,
         errorMessage: finalStatus === "timed_out" ? errorMessage ?? crawl.errorMessage : null,
       })
-      .where(eq(crawls.id, crawlId));
+      .where(and(eq(crawls.id, crawlId), notInArray(crawls.status, ["cancelled", "failed"])))
+      .returning({ id: crawls.id });
+
+    if (updatedRows.length === 0) {
+      await publishLogAndPersist(
+        crawlId,
+        "warn",
+        "Skipped marking crawl completed: status is cancelled or failed (user may have cancelled during upload)"
+      );
+      return;
+    }
 
     if (finalStatus === "completed") {
       await publishLogAndPersist(
@@ -760,7 +809,9 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
 
     const timeoutController = new AbortController();
     const timeoutId = setTimeout(() => {
-      timeoutController.abort();
+      timeoutController.abort(
+        new CrawlTimeoutError(`Crawl exceeded max duration of ${Math.round(maxDurationMs / 60000)} minutes`)
+      );
     }, maxDurationMs);
 
     const assertCrawlIsActive = async (force = false): Promise<void> => {
@@ -829,16 +880,10 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
         removeWebflowBadge: site.removeWebflowBadge ?? true,
         redirectsCsv: site.redirectsCsv ?? undefined,
         resume: shouldResume,
+        signal: timeoutController.signal,
         shouldAbort: async () => {
-          try {
-            await assertCrawlIsActive();
-            return false;
-          } catch (error) {
-            if (error instanceof CrawlCancelledError || error instanceof CrawlTimeoutError) {
-              return true;
-            }
-            throw error;
-          }
+          await assertCrawlIsActive();
+          return false;
         },
         onProgress: async (progress: CrawlProgress) => {
           await publishEvent(crawlId, { type: "progress", ...progress });
@@ -867,12 +912,13 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
           });
           await db.insert(crawlLogs).values({ crawlId, level, message, url });
         },
-        onMemorySnapshot: async (
-          label: string,
-          snapshot: MemorySnapshot,
-          peakRssBytes: number
-        ) => {
-          await publishLogAndPersist(crawlId, "info", formatMemorySnapshot(label, snapshot, peakRssBytes));
+        onMemorySnapshot: async (label: string, snapshot: MemorySnapshot, peakRssBytes: number) => {
+          await publishEvent(crawlId, {
+            type: "log",
+            level: "info",
+            message: formatMemorySnapshot(label, snapshot, peakRssBytes),
+            timestamp: new Date().toISOString(),
+          });
         },
       } as any);
 

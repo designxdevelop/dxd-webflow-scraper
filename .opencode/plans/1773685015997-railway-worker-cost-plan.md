@@ -24,10 +24,9 @@ Primary goals:
 ### Code Hotspots
 
 - `packages/scraper/src/asset-downloader.ts`
-  - binary assets are loaded fully into memory via `res.arrayBuffer()` then wrapped in `Buffer`
-  - direct-path downloads do the same thing
+  - **Update (implemented):** binary assets stream to disk; direct-path downloads stream.
 - `packages/scraper/src/url-rewriter.ts`
-  - many asset rewrite phases use broad `Promise.all(...)` fanout per page
+  - **Update (implemented):** rewrite phases use shared `p-limit` bounded concurrency (`CRAWL_ASSET_CONCURRENCY`).
 - `packages/scraper/src/page-processor.ts`
   - dynamic-page asset downloads are collected into another broad `Promise.all(...)`
 - `services/worker/src/processor.ts`
@@ -65,83 +64,50 @@ Primary goals:
 
 ## Build-Agent TODOs
 
-### Phase 0 - Stop Obvious Cost Waste First
+> **Note:** Phase 1 (code) items below are **implemented in the repo** as of this plan revision. Phase 0 items are **operational / Railway** and may still need verification in your environment.
+
+### Phase 0 - Stop Obvious Cost Waste First *(ops — not fully verifiable from code)*
 
 - [ ] Verify the live worker really runs with `1` replica in Railway.
 - [ ] If any worker deployment still runs `3` replicas, force it down to `1`.
-- [ ] Reduce worker CPU limit from `32` to `4` immediately.
-- [ ] Keep worker memory at `32 GB` until the first code pass lands; do not reduce memory first.
-- [ ] Lower worker runtime envs now:
-  - [ ] set `MAX_SITE_CONCURRENCY=3`
-  - [ ] set `MAX_CRAWL_CONCURRENCY=4`
-- [ ] Enable `ASSET_CACHE_ENABLED=true` for repeat-crawl savings.
+- [ ] Reduce worker CPU limit from `32` to `4` immediately (if still applicable to your project).
+- [ ] Keep worker memory high until memory-related code passes are validated; then right-size.
+- [ ] Lower worker runtime envs as desired:
+  - [ ] set `MAX_SITE_CONCURRENCY=3` (or your chosen cap)
+  - [ ] set `MAX_CRAWL_CONCURRENCY=4` (or your chosen cap)
+- [ ] Enable `ASSET_CACHE_ENABLED=true` for repeat-crawl savings *(optional)*.
 
-### Phase 1 - Remove the Biggest Memory Spikes
+### Phase 1 - Remove the Biggest Memory Spikes *(code — done)*
 
-#### 1. Stream binary assets to disk instead of buffering
+#### 1. Stream binary assets to disk instead of buffering — **DONE**
 
 Files:
 - `packages/scraper/src/asset-downloader.ts`
 
-Tasks:
-- [ ] Add a helper that streams `Response.body` directly to a file path.
-- [ ] Replace binary asset download paths that currently use `Buffer.from(await res.arrayBuffer())`.
-- [ ] Replace `downloadAssetToPath()` buffering with streaming writes.
-- [ ] Keep CSS/JS text flows as text for rewrite support.
-- [ ] Preserve abort behavior and fetch timeout behavior.
-- [ ] Add tests that prove large binary assets are written without array-buffer buffering.
+Implemented:
+- [x] Stream `Response.body` to disk for binary assets; `downloadAssetToPath` streams.
+- [x] Tests: `asset-downloader.test.ts` (large binary streaming / HEAD skip).
 
-Expected impact:
-- biggest reduction in memory spikes during image/media-heavy crawls
-- direct cost benefit because it makes lower RAM limits feasible
-
-#### 2. Bound per-page asset fanout with `p-limit`
+#### 2. Bound per-page asset fanout with `p-limit` — **DONE**
 
 Files:
 - `packages/scraper/src/url-rewriter.ts`
 - `packages/scraper/src/page-processor.ts`
 
-Tasks:
-- [ ] Introduce a shared bounded-concurrency helper using the existing `p-limit` dependency.
-- [ ] Replace broad `Promise.all(...)` fanout in rewrite phases with bounded execution.
-- [ ] Apply limits to:
-  - [ ] stylesheets
-  - [ ] scripts
-  - [ ] images and `srcset`
-  - [ ] media
-  - [ ] icons
-  - [ ] meta images
-  - [ ] iframes
-  - [ ] inline styles
-  - [ ] code-island mirroring
-- [ ] Replace dynamic page `downloadPromises` fanout in `page-processor.ts` with bounded execution.
-- [ ] Add env vars with conservative defaults, for example:
-  - [ ] `CRAWL_ASSET_CONCURRENCY=6`
-  - [ ] `CRAWL_PAGE_ASSET_CONCURRENCY=6`
-- [ ] Add tests for helper behavior and one integration test covering rewritten assets under bounded concurrency.
+Implemented:
+- [x] Shared `runWithConcurrencyLimit` + `CRAWL_ASSET_CONCURRENCY` for rewriter phases (stylesheets, scripts, images/srcset, media, icons, meta images, iframes, inline styles, code islands).
+- [x] `CRAWL_PAGE_ASSET_CONCURRENCY` for dynamic page asset fanout in `page-processor.ts`.
+- [x] Tests: `url-rewriter.test.ts` (bounded concurrency).
 
-Expected impact:
-- smoother memory usage within a single crawl
-- lower burst network pressure
-- fewer cases where one large page forces oversized containers
-
-#### 3. Add large-asset protection
+#### 3. Add large-asset protection — **DONE**
 
 Files:
 - `packages/scraper/src/asset-downloader.ts`
-- optionally `packages/scraper/src/types.ts` if surfacing results
 
-Tasks:
-- [ ] Add optional HEAD/content-length checks for binary/media assets.
-- [ ] Add env guards such as:
-  - [ ] `CRAWL_MAX_BINARY_ASSET_BYTES`
-  - [ ] `CRAWL_MAX_MEDIA_ASSET_BYTES`
-- [ ] Skip or warn on extremely large files rather than trying to mirror them blindly.
-- [ ] Make the skip behavior visible in logs.
-- [ ] Add tests for skip behavior when content length exceeds configured limits.
-
-Expected impact:
-- prevents a few pathological assets from forcing huge memory, bandwidth, and storage costs
+Implemented:
+- [x] HEAD / content-length checks; env `CRAWL_MAX_BINARY_ASSET_BYTES`, `CRAWL_MAX_MEDIA_ASSET_BYTES`.
+- [x] Logged skip behavior; disk-cache hits respect size limits (local stat + HEAD).
+- [x] Tests for oversize skip in `asset-downloader.test.ts`.
 
 ### Phase 2 - Make Archive/Upload Cheaper
 

@@ -18,6 +18,7 @@ import {
   filterUrlsForResume,
 } from "./state-manager.js";
 import { extractLinks } from "./link-extractor.js";
+import { CrawlCancelledError, CrawlTimeoutError } from "./crawl-errors.js";
 
 const CRAWL_ABORT_MESSAGE = "Crawl cancelled by request.";
 // Configurable batch size for state persistence - smaller = more frequent writes but safer against crashes
@@ -33,18 +34,52 @@ function readPositiveInt(envVar: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-async function withTimeout<T>(fn: () => Promise<T>, timeoutMs: number, label: string): Promise<T> {
+function combineAbortSignals(signals: AbortSignal[]): AbortSignal {
+  if (signals.length === 1) {
+    return signals[0]!;
+  }
+  if (typeof AbortSignal.any === "function") {
+    return AbortSignal.any(signals);
+  }
+  const combined = new AbortController();
+  for (const sig of signals) {
+    if (sig.aborted) {
+      combined.abort(sig.reason);
+      return combined.signal;
+    }
+    sig.addEventListener(
+      "abort",
+      () => {
+        combined.abort(sig.reason);
+      },
+      { once: true }
+    );
+  }
+  return combined.signal;
+}
+
+async function withTimeout<T>(
+  fn: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+  label: string,
+  parentSignal?: AbortSignal
+): Promise<T> {
+  const timeoutController = new AbortController();
   let timer: ReturnType<typeof setTimeout>;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      timeoutController.abort();
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    timer.unref?.();
+  });
+  const signals = [timeoutController.signal];
+  if (parentSignal) {
+    signals.push(parentSignal);
+  }
+  const combined = combineAbortSignals(signals);
   try {
-    return await Promise.race([
-      fn(),
-      new Promise<T>((_, reject) => {
-        timer = setTimeout(() => {
-          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-        timer.unref?.();
-      }),
-    ]);
+    return await Promise.race([fn(combined), timeoutPromise]);
   } finally {
     clearTimeout(timer!);
   }
@@ -61,12 +96,26 @@ async function shouldAbort(options: CrawlOptions): Promise<boolean> {
 }
 
 async function assertNotAborted(options: CrawlOptions): Promise<void> {
-  if (await shouldAbort(options)) {
+  if (options.signal?.aborted) {
+    const reason = options.signal.reason;
+    if (reason instanceof CrawlCancelledError || reason instanceof CrawlTimeoutError) {
+      throw reason;
+    }
+    throw new Error(CRAWL_ABORT_MESSAGE);
+  }
+  if (!options.shouldAbort) {
+    return;
+  }
+  const aborted = await options.shouldAbort();
+  if (aborted) {
     throw new Error(CRAWL_ABORT_MESSAGE);
   }
 }
 
 function isAbortError(error: unknown): boolean {
+  if (error instanceof CrawlCancelledError || error instanceof CrawlTimeoutError) {
+    return true;
+  }
   if (!(error instanceof Error)) {
     return false;
   }
@@ -481,7 +530,7 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
       const configuredMaxConcurrency = readPositiveInt("MAX_CRAWL_CONCURRENCY", 30);
       const requestedConcurrency = Math.max(1, options.concurrency);
 
-      const memoryBufferBytes = readPositiveInt("CRAWL_MEMORY_BUFFER_GB", 15) * 1024 ** 3 / 10;
+      const memoryBufferBytes = readPositiveInt("CRAWL_MEMORY_BUFFER_GB", 15) * 1024 ** 3;
       const memoryBytesPerPage = readPositiveInt("CRAWL_MEMORY_MB_PER_PAGE", 150) * 1024 ** 2;
       const memoryBytesPerBrowser = readPositiveInt("CRAWL_MEMORY_MB_PER_BROWSER", 350) * 1024 ** 2;
 
@@ -593,12 +642,12 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
       await updateStateProgress(statePath, state!, succeededBatch, failedBatch);
     };
 
-      const reportProgress = async (currentUrl?: string): Promise<void> => {
+      const reportProgress = async (currentUrl?: string, totalOverride?: number): Promise<void> => {
       if (!options.onProgress) {
         return;
       }
       const progress: CrawlProgress = {
-        total: Math.max(allPages.length, urlQueue.length),
+        total: totalOverride ?? Math.max(allPages.length, urlQueue.length),
         succeeded: succeededCount,
         failed: failedCount,
         currentUrl,
@@ -675,21 +724,24 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
               try {
                 // B3: Retry with exponential backoff + overall page timeout
                 const pageResult = await withRetry(
-                  () => withTimeout(
-                    () => processPage({
-                      url,
-                      context,
-                      outputDir: resolvedOutput,
-                      assets: assetDownloader,
-                      removeWebflowBadge: options.removeWebflowBadge ?? true,
-                      tryStaticFirst: staticFastPath,
-                      sitemapOnly,
-                      shouldAbort: options.shouldAbort,
-                      signal: options.signal,
-                    }),
-                    pageTimeoutMs,
-                    `Page processing for ${url}`
-                  ),
+                  () =>
+                    withTimeout(
+                      (pageSignal) =>
+                        processPage({
+                          url,
+                          context,
+                          outputDir: resolvedOutput,
+                          assets: assetDownloader,
+                          removeWebflowBadge: options.removeWebflowBadge ?? true,
+                          tryStaticFirst: staticFastPath,
+                          sitemapOnly,
+                          shouldAbort: options.shouldAbort,
+                          signal: pageSignal,
+                        }),
+                      pageTimeoutMs,
+                      `Page processing for ${url}`,
+                      options.signal
+                    ),
                   maxRetries,
                   retryBaseDelayMs,
                   url,
@@ -770,6 +822,8 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
       browserRecoveries.length = 0;
     }
 
+      const finalTotalUrls = Math.max(allPages.length, urlQueue.length);
+
       // Release crawl-scoped data structures before archiving
       visitedUrls.clear();
       urlQueue.length = 0;
@@ -781,7 +835,7 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
       await assertNotAborted(options);
       await flushStateProgress(true);
       await writeOutputConfig(resolvedOutput, options.redirectsCsv);
-      await reportProgress();
+      await reportProgress(undefined, finalTotalUrls);
 
       let cacheHitRate = "n/a";
       if (assetCache) {
@@ -799,13 +853,13 @@ export async function crawlSite(options: CrawlOptions): Promise<CrawlResult> {
         );
       }
       await recordMemorySnapshot("crawl complete", {
-        total: Math.max(allPages.length, urlQueue.length),
+        total: finalTotalUrls,
         succeeded: succeededCount,
         failed: failedCount,
       });
 
       return {
-        total: Math.max(allPages.length, urlQueue.length),
+        total: finalTotalUrls,
         succeeded: succeededCount,
         failed: failedCount,
         durationMs: Date.now() - startedAt,

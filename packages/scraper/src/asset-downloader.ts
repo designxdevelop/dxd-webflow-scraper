@@ -114,6 +114,20 @@ export class AssetDownloader {
         // Only cache binary assets — CSS/JS need URL rewriting which is context-dependent
         const cachedPath = await this.diskCache.getPath(normalized);
         if (cachedPath) {
+          const sizeLimitBytes = this.getSizeLimitBytes(category);
+          if (sizeLimitBytes > 0) {
+            const stat = await fs.stat(cachedPath).catch(() => null);
+            const cachedSize = stat?.size;
+            if (cachedSize !== undefined && cachedSize > sizeLimitBytes) {
+              this.logLargeAssetSkip(normalized, category, cachedSize, sizeLimitBytes, "disk-cache");
+              return normalized;
+            }
+            const headContentLength = await this.fetchHeadContentLength(normalized);
+            if (headContentLength !== null && headContentLength > sizeLimitBytes) {
+              this.logLargeAssetSkip(normalized, category, headContentLength, sizeLimitBytes, "head");
+              return normalized;
+            }
+          }
           relativePath = await this.writeBinaryAssetFromPath(cachedPath, normalized, category, null);
           const webPath = `/${relativePath.replace(/\\+/g, "/")}`;
           this.cache.set(normalized, webPath);
@@ -450,7 +464,7 @@ export class AssetDownloader {
     category: AssetCategory,
     sizeBytes: number,
     limitBytes: number,
-    source: "head" | "content-length" | "stream"
+    source: "head" | "content-length" | "stream" | "disk-cache"
   ): void {
     log.warn(
       `Skipping ${category} asset ${assetUrl} because ${source} size ${formatByteSize(sizeBytes)} exceeds limit ${formatByteSize(limitBytes)}`,

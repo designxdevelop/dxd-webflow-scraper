@@ -32,3 +32,4 @@ export {
   updateStateProgress,
   filterUrlsForResume,
 } from "./state-manager.js";
+export { CrawlCancelledError, CrawlTimeoutError } from "./crawl-errors.js";

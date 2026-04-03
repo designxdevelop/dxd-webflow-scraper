@@ -13,7 +13,11 @@ const createdTempDirs: string[] = [];
 
 afterEach(async () => {
   globalThis.fetch = originalFetch;
-  process.env.CRAWL_ASSET_CONCURRENCY = originalAssetConcurrency;
+  if (originalAssetConcurrency === undefined) {
+    delete process.env.CRAWL_ASSET_CONCURRENCY;
+  } else {
+    process.env.CRAWL_ASSET_CONCURRENCY = originalAssetConcurrency;
+  }
   await Promise.all(createdTempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 

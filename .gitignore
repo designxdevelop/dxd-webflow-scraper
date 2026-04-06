@@ -38,6 +38,7 @@ coverage/
 
 # Misc
 *.tsbuildinfo
+.worktrees/
 
 # Local data
 data/

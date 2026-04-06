@@ -361,7 +361,7 @@ export class AssetDownloader {
     } else {
       // For other assets, use slugified name with hash for deduplication
       const hash = crypto.createHash("sha1").update(assetUrl).digest("hex").slice(0, 10);
-      filename = `${slugify(baseName)}-${hash}${safeExt}`;
+      filename = buildBoundedAssetFilename(baseName, hash, safeExt);
     }
 
     const relativeDir = path.relative(this.outputDir, targetDir) || "";
@@ -949,6 +949,18 @@ function inferCategoryFromExt(url: string): AssetCategory | undefined {
   if (FONT_EXTS.has(ext)) return "font";
   if (MEDIA_EXTS.has(ext)) return "media";
   return undefined;
+}
+
+const MAX_GENERATED_ASSET_FILENAME_LENGTH = 200;
+
+function buildBoundedAssetFilename(baseName: string, hash: string, ext: string): string {
+  const maxExtLength = Math.max(0, MAX_GENERATED_ASSET_FILENAME_LENGTH - 1 - hash.length - 1);
+  const boundedExt = ext.slice(0, maxExtLength);
+  const slug = slugify(baseName);
+  const reservedLength = 1 + hash.length + boundedExt.length;
+  const maxBaseLength = Math.max(1, MAX_GENERATED_ASSET_FILENAME_LENGTH - reservedLength);
+  const boundedBase = slug.slice(0, maxBaseLength).replace(/-+$/g, "") || "asset";
+  return `${boundedBase}-${hash}${boundedExt}`;
 }
 
 function slugify(value: string): string {

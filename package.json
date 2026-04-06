@@ -17,7 +17,7 @@
     "start:web": "bun run --filter @dxd/web start",
     "start:worker": "bun run --filter @dxd/worker start",
     "lint": "turbo lint",
-    "test": "bun test apps/api/src apps/web/src/lib packages/scraper/src",
+    "test": "bun test apps/api/src apps/web/src/lib packages/scraper/src services/worker/src",
     "verify": "bun run lint && bun run test",
     "db:generate": "turbo db:generate --filter=@dxd/api",
     "db:migrate": "turbo db:migrate --filter=@dxd/api",

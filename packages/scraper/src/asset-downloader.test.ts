@@ -85,4 +85,77 @@ describe("AssetDownloader", () => {
     assert.equal(result, "https://example.com/hero.png");
     assert.ok(logs.some((message) => message.includes("Skipping image asset https://example.com/hero.png")));
   });
+
+  it("truncates oversized asset basenames before writing to disk", async () => {
+    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "dxd-asset-long-name-"));
+    createdTempDirs.push(outputDir);
+
+    const longBaseName = "hero-".repeat(80);
+    globalThis.fetch = async () =>
+      new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: {
+          "content-type": "image/webp",
+          "content-length": "3",
+        },
+      });
+
+    const assets = new AssetDownloader(outputDir);
+    await assets.init();
+
+    const localPath = await assets.downloadAsset(`https://example.com/images/${longBaseName}.webp`, "image");
+    const filename = path.basename(localPath);
+
+    assert.ok(filename.length <= 200, `expected filename <= 200 chars, got ${filename.length}`);
+    assert.match(filename, /-[a-f0-9]{10}\.webp$/);
+
+    const saved = await fs.readFile(path.join(outputDir, localPath.slice(1)));
+    assert.deepEqual(Array.from(saved), [1, 2, 3]);
+  });
+
+  it("keeps generated filenames within the cap when the source extension is pathologically long", async () => {
+    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "dxd-asset-long-ext-"));
+    createdTempDirs.push(outputDir);
+
+    const longExt = `.${"x".repeat(220)}`;
+    globalThis.fetch = async () =>
+      new Response("body { color: red; }", {
+        status: 200,
+        headers: {
+          "content-type": "text/css",
+          "content-length": "20",
+        },
+      });
+
+    const assets = new AssetDownloader(outputDir);
+    await assets.init();
+
+    const localPath = await assets.downloadAsset(`https://example.com/css/site${longExt}`, "css");
+    const filename = path.basename(localPath);
+
+    assert.ok(filename.length <= 200, `expected filename <= 200 chars, got ${filename.length}`);
+
+    const saved = await fs.readFile(path.join(outputDir, localPath.slice(1)), "utf8");
+    assert.equal(saved, "body { color: red; }");
+  });
+
+  it("preserves chunk filenames exactly", async () => {
+    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "dxd-asset-chunk-name-"));
+    createdTempDirs.push(outputDir);
+
+    globalThis.fetch = async () =>
+      new Response("console.log('chunk');", {
+        status: 200,
+        headers: {
+          "content-type": "application/javascript",
+          "content-length": "21",
+        },
+      });
+
+    const assets = new AssetDownloader(outputDir);
+    await assets.init();
+
+    const localPath = await assets.downloadAsset("https://example.com/js/runtime.achunk.abcdef123456.js", "js");
+    assert.equal(localPath, "/js/runtime.achunk.abcdef123456.js");
+  });
 });

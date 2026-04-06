@@ -18,6 +18,7 @@ import path from "node:path";
 import archiver from "archiver";
 import { once } from "node:events";
 import { captureMemorySnapshot, formatMemorySnapshot, type MemorySnapshot } from "./memory.js";
+import { getWorkerRuntimeConfig } from "./worker-config.js";
 
 const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
 const storage = getStorage();
@@ -990,8 +991,7 @@ async function processCrawlJob(job: Job<CrawlJobData>) {
   });
 }
 
-async function reconcileOrphanedCrawls(): Promise<void> {
-  const orphanGraceMs = parsePositiveIntEnv("ORPHAN_CRAWL_GRACE_MS", 5 * 60 * 1000);
+async function reconcileOrphanedCrawls(orphanGraceMs = getWorkerRuntimeConfig().orphanGraceMs): Promise<void> {
   const cutoff = new Date(Date.now() - orphanGraceMs);
 
   const possiblyOrphaned = await db.query.crawls.findMany({
@@ -1137,51 +1137,44 @@ function attachWorkerLogging<T>(worker: Worker<T>, label: string, reconcileTimer
 }
 
 export function startWorker() {
-  const workerConcurrency = parsePositiveIntEnv("WORKER_CRAWL_CONCURRENCY", 1);
-  const archiveConcurrency = parsePositiveIntEnv("WORKER_ARCHIVE_CONCURRENCY", 1);
-  // Long crawl/upload/zip phases can starve lock renewal under heavy CPU pressure.
-  // Use conservative defaults to avoid duplicate retry attempts on healthy long-running jobs.
-  const lockDuration = parsePositiveIntEnv("WORKER_LOCK_DURATION_MS", 900000);
-  const stalledInterval = parsePositiveIntEnv("WORKER_STALLED_INTERVAL_MS", 120000);
+  const config = getWorkerRuntimeConfig();
 
   const crawlWorker = new Worker<CrawlJobData>("crawl-jobs", processCrawlJob, {
     connection: workerConnection,
-    concurrency: workerConcurrency,
-    lockDuration,
-    stalledInterval,
+    concurrency: config.crawlConcurrency,
+    lockDuration: config.lockDuration,
+    stalledInterval: config.stalledInterval,
     // Critical: Set to 0 to prevent BullMQ from auto-retrying stalled jobs
     // Stalled jobs are handled by orphan reconciliation - we want manual control
     maxStalledCount: 0,
-    // Disable automatic job recovery - we'll handle it via reconcileOrphanedCrawls
-    skipLockRenewal: true,
+    skipLockRenewal: config.skipLockRenewal,
   });
 
   const archiveWorker = new Worker<ArchiveJobData>("archive-jobs", processArchiveJob, {
     connection: workerConnection,
-    concurrency: archiveConcurrency,
-    lockDuration,
-    stalledInterval,
+    concurrency: config.archiveConcurrency,
+    lockDuration: config.lockDuration,
+    stalledInterval: config.stalledInterval,
     maxStalledCount: 0,
-    skipLockRenewal: true,
+    skipLockRenewal: config.skipLockRenewal,
   });
 
-  const reconcileIntervalMs = parsePositiveIntEnv("ORPHAN_CRAWL_RECONCILE_INTERVAL_MS", 120000);
-  void reconcileOrphanedCrawls().catch((error) => {
+  void reconcileOrphanedCrawls(config.orphanGraceMs).catch((error) => {
     console.error("[Worker] Failed to reconcile orphaned crawls:", error);
   });
 
   const reconcileTimer = setInterval(() => {
-    void reconcileOrphanedCrawls().catch((error) => {
+    void reconcileOrphanedCrawls(config.orphanGraceMs).catch((error) => {
       console.error("[Worker] Failed to reconcile orphaned crawls:", error);
     });
-  }, reconcileIntervalMs);
+  }, config.reconcileIntervalMs);
   reconcileTimer.unref();
 
   attachWorkerLogging(crawlWorker, "crawl", reconcileTimer);
   attachWorkerLogging(archiveWorker, "archive", reconcileTimer);
 
   console.log(
-    `[Worker] Started crawl worker (concurrency=${workerConcurrency}) and archive worker (concurrency=${archiveConcurrency}, lockDuration=${lockDuration}ms)`
+    `[Worker] Started crawl worker (concurrency=${config.crawlConcurrency}) and archive worker (concurrency=${config.archiveConcurrency}, lockDuration=${config.lockDuration}ms)`
   );
 
   return {

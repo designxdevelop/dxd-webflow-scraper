@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import { sitesApi, crawlsApi, hostingApi, type DomainDnsCheck, type HostingBillingStatus } from "@/lib/api";
 import { formatToMountainTime } from "@/lib/date";
 import { parseCron, toCronExpression, type ScheduleFrequency, WEEKDAYS } from "@/lib/schedule";
-import { ArrowLeft, Play, ExternalLink, Trash2, Download, Save, Globe2, UploadCloud, RefreshCw, CreditCard } from "lucide-react";
+import { ArrowLeft, Play, ExternalLink, Trash2, Download, Save, Globe2, UploadCloud, RefreshCw, CreditCard, Copy } from "lucide-react";
 import { useEffect, useState } from "react";
 
 export const Route = createFileRoute("/sites/$siteId")({
@@ -50,6 +50,7 @@ function SiteDetailPage() {
   const [domainRedirectTargets, setDomainRedirectTargets] = useState<Record<string, string>>({});
   const [domainDnsChecks, setDomainDnsChecks] = useState<Record<string, DomainDnsCheck>>({});
   const [domainMessage, setDomainMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [copiedDnsRecordKey, setCopiedDnsRecordKey] = useState<string | null>(null);
 
   const site = data?.site;
 
@@ -237,6 +238,14 @@ function SiteDetailPage() {
     );
     return `mailto:${hostingBillingEmail.trim()}?subject=${subject}&body=${body}`;
   })();
+
+  const copyDnsText = async (key: string, value: string) => {
+    await navigator.clipboard.writeText(value);
+    setCopiedDnsRecordKey(key);
+    window.setTimeout(() => {
+      setCopiedDnsRecordKey((current) => (current === key ? null : current));
+    }, 1800);
+  };
 
   if (isLoading) {
     return (
@@ -736,8 +745,46 @@ function SiteDetailPage() {
 
               {hostingData?.domains.map((domain) => {
                 const dnsCheck = domainDnsChecks[domain.id];
-                const ownershipTxtCheck = dnsCheck?.ownershipTxt;
-                const sslTxtCheck = dnsCheck?.sslTxt;
+                const dnsRecords = [
+                  {
+                    key: "cname",
+                    label: "Client CNAME",
+                    type: "CNAME",
+                    name: domain.hostname,
+                    value: domain.cnameTarget,
+                    verified: dnsCheck?.cname.verified,
+                    found: dnsCheck?.cname.values,
+                  },
+                  ...(domain.ownershipVerificationName && domain.ownershipVerificationValue
+                    ? [
+                        {
+                          key: "ownership-txt",
+                          label: "Cloudflare ownership TXT",
+                          type: "TXT",
+                          name: domain.ownershipVerificationName,
+                          value: domain.ownershipVerificationValue,
+                          verified: dnsCheck?.ownershipTxt?.verified,
+                          found: dnsCheck?.ownershipTxt?.values,
+                        },
+                      ]
+                    : []),
+                  ...(domain.sslValidationTxtName && domain.sslValidationTxtValue
+                    ? [
+                        {
+                          key: "ssl-txt",
+                          label: "SSL ACME TXT",
+                          type: "TXT",
+                          name: domain.sslValidationTxtName,
+                          value: domain.sslValidationTxtValue,
+                          verified: dnsCheck?.sslTxt?.verified,
+                          found: dnsCheck?.sslTxt?.values,
+                        },
+                      ]
+                    : []),
+                ];
+                const dnsRecordsText = dnsRecords
+                  .map((record) => `${record.type}\t${record.name}\t${record.value}`)
+                  .join("\n");
 
                 return (
                 <div key={domain.id} className="rounded-lg p-3 space-y-3" style={{ backgroundColor: "#09090b", border: "1px solid #27272a" }}>
@@ -781,61 +828,86 @@ function SiteDetailPage() {
                     </div>
                   </div>
 
-                  <div className="rounded-md p-3 text-xs font-mono space-y-2" style={{ backgroundColor: "#050507", border: "1px solid #27272a", color: "#71717a" }}>
-                    <p className="font-semibold" style={{ color: "#a1a1aa" }}>Verification records</p>
-                    <div>
-                      <div>CNAME name: {domain.hostname}</div>
-                      <div className="break-all">CNAME value: {domain.cnameTarget}</div>
+                  <div className="rounded-md p-3 text-xs font-mono space-y-3" style={{ backgroundColor: "#050507", border: "1px solid #27272a", color: "#71717a" }}>
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                      <div>
+                        <p className="font-semibold" style={{ color: "#a1a1aa" }}>Client DNS records</p>
+                        <p style={{ color: "#52525b" }}>Send these exact records to whoever manages DNS for this hostname.</p>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn-ghost btn-sm self-start sm:self-auto"
+                        onClick={() => copyDnsText(`${domain.id}:all`, dnsRecordsText)}
+                      >
+                        <Copy size={13} />
+                        {copiedDnsRecordKey === `${domain.id}:all` ? "Copied" : "Copy All"}
+                      </button>
                     </div>
-                    {domain.ownershipVerificationName && domain.ownershipVerificationValue ? (
-                      <div>
-                        <div style={{ color: "#a1a1aa" }}>Cloudflare ownership TXT</div>
-                        <div className="break-all">TXT name: {domain.ownershipVerificationName}</div>
-                        <div className="break-all">TXT value: {domain.ownershipVerificationValue}</div>
-                      </div>
-                    ) : (
-                      <div>TXT verification: not returned by Cloudflare yet. Click Sync Cloudflare after provisioning.</div>
+
+                    <div className="space-y-2">
+                      {dnsRecords.map((record) => {
+                        const recordText = `${record.type}\t${record.name}\t${record.value}`;
+                        const recordKey = `${domain.id}:${record.key}`;
+                        return (
+                          <div
+                            key={record.key}
+                            className="rounded-md p-3 space-y-2"
+                            style={{ backgroundColor: "#09090b", border: "1px solid #27272a" }}
+                          >
+                            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="px-1.5 py-0.5 rounded" style={{ backgroundColor: "#18181b", color: "#fafafa" }}>
+                                    {record.type}
+                                  </span>
+                                  <span style={{ color: "#a1a1aa" }}>{record.label}</span>
+                                  {typeof record.verified === "boolean" && (
+                                    <span style={{ color: record.verified ? "#4ade80" : "#fbbf24" }}>
+                                      {record.verified ? "verified" : "not visible yet"}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="mt-2 grid gap-1">
+                                  <div className="break-all"><span style={{ color: "#52525b" }}>Name:</span> {record.name}</div>
+                                  <div className="break-all"><span style={{ color: "#52525b" }}>Value:</span> {record.value}</div>
+                                </div>
+                              </div>
+                              <div className="flex flex-wrap gap-1.5 shrink-0">
+                                <button type="button" className="btn-ghost btn-sm" onClick={() => copyDnsText(`${recordKey}:name`, record.name)}>
+                                  <Copy size={13} />
+                                  {copiedDnsRecordKey === `${recordKey}:name` ? "Copied" : "Name"}
+                                </button>
+                                <button type="button" className="btn-ghost btn-sm" onClick={() => copyDnsText(`${recordKey}:value`, record.value)}>
+                                  <Copy size={13} />
+                                  {copiedDnsRecordKey === `${recordKey}:value` ? "Copied" : "Value"}
+                                </button>
+                                <button type="button" className="btn-ghost btn-sm" onClick={() => copyDnsText(`${recordKey}:record`, recordText)}>
+                                  <Copy size={13} />
+                                  {copiedDnsRecordKey === `${recordKey}:record` ? "Copied" : "Record"}
+                                </button>
+                              </div>
+                            </div>
+                            {record.found && (
+                              <div className="break-all" style={{ color: "#52525b" }}>
+                                Found: {record.found.length ? record.found.join(", ") : "none"}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {(!domain.ownershipVerificationName || !domain.ownershipVerificationValue) && (
+                      <p style={{ color: "#fbbf24" }}>
+                        Ownership TXT has not been returned by Cloudflare yet. Click Sync Cloudflare after provisioning.
+                      </p>
                     )}
-                    {domain.sslValidationTxtName && domain.sslValidationTxtValue ? (
-                      <div>
-                        <div style={{ color: "#a1a1aa" }}>SSL ACME TXT</div>
-                        <div className="break-all">TXT name: {domain.sslValidationTxtName}</div>
-                        <div className="break-all">TXT value: {domain.sslValidationTxtValue}</div>
-                      </div>
-                    ) : (
-                      <div>SSL ACME TXT: not returned by Cloudflare yet. Click Sync Cloudflare after DNS is in place.</div>
+                    {(!domain.sslValidationTxtName || !domain.sslValidationTxtValue) && (
+                      <p style={{ color: "#fbbf24" }}>
+                        SSL ACME TXT has not been returned by Cloudflare yet. Click Sync Cloudflare after the CNAME is visible.
+                      </p>
                     )}
-                    {dnsCheck && (
-                      <div className="space-y-1 pt-2" style={{ borderTop: "1px solid #27272a" }}>
-                        <div style={{ color: dnsCheck.cname.verified ? "#4ade80" : "#fbbf24" }}>
-                          CNAME check: {dnsCheck.cname.verified ? "verified" : "not visible yet"}
-                        </div>
-                        <div className="break-all">
-                          Found CNAME: {dnsCheck.cname.values.length ? dnsCheck.cname.values.join(", ") : "none"}
-                        </div>
-                        {ownershipTxtCheck && (
-                          <>
-                            <div style={{ color: ownershipTxtCheck.verified ? "#4ade80" : "#fbbf24" }}>
-                              Ownership TXT check: {ownershipTxtCheck.verified ? "verified" : "not visible yet"}
-                            </div>
-                            <div className="break-all">
-                              Found ownership TXT: {ownershipTxtCheck.values.length ? ownershipTxtCheck.values.join(", ") : "none"}
-                            </div>
-                          </>
-                        )}
-                        {sslTxtCheck && (
-                          <>
-                            <div style={{ color: sslTxtCheck.verified ? "#4ade80" : "#fbbf24" }}>
-                              SSL ACME TXT check: {sslTxtCheck.verified ? "verified" : "not visible yet"}
-                            </div>
-                            <div className="break-all">
-                              Found SSL ACME TXT: {sslTxtCheck.values.length ? sslTxtCheck.values.join(", ") : "none"}
-                            </div>
-                          </>
-                        )}
-                        <div>Checked: {formatToMountainTime(dnsCheck.checkedAt)}</div>
-                      </div>
-                    )}
+                    {dnsCheck && <div>Last checked: {formatToMountainTime(dnsCheck.checkedAt)}</div>}
                   </div>
 
                   <div className="space-y-2">

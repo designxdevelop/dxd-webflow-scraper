@@ -295,13 +295,13 @@ export const hostingApi = {
     return parseApiResponse<{ publication: SitePublication }>(res, "Failed to publish backup");
   },
 
-  addDomain: async (siteId: string, hostname: string): Promise<{ domain: SiteDomain }> => {
+  addDomain: async (siteId: string, hostname: string): Promise<{ domain: SiteDomain; alreadyExists?: boolean }> => {
     const res = await fetchWithAuth(`${API_BASE}/sites/${siteId}/domains`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ hostname }),
     });
-    return parseApiResponse<{ domain: SiteDomain }>(res, "Failed to add domain");
+    return parseApiResponse<{ domain: SiteDomain; alreadyExists?: boolean }>(res, "Failed to add domain");
   },
 
   syncDomain: async (siteId: string, domainId: string): Promise<{ domain: SiteDomain }> => {

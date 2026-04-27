@@ -49,6 +49,7 @@ function SiteDetailPage() {
   const [hostingSettingsDirty, setHostingSettingsDirty] = useState(false);
   const [domainRedirectTargets, setDomainRedirectTargets] = useState<Record<string, string>>({});
   const [domainDnsChecks, setDomainDnsChecks] = useState<Record<string, DomainDnsCheck>>({});
+  const [domainMessage, setDomainMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   const site = data?.site;
 
@@ -156,9 +157,16 @@ function SiteDetailPage() {
 
   const addDomainMutation = useMutation({
     mutationFn: (nextHostname: string) => hostingApi.addDomain(siteId, nextHostname),
-    onSuccess: () => {
+    onSuccess: (data) => {
       setHostname("");
+      setDomainMessage({
+        type: "success",
+        text: "alreadyExists" in data && data.alreadyExists ? "Domain already exists; refreshed details." : "Domain added.",
+      });
       queryClient.invalidateQueries({ queryKey: ["hosting", siteId] });
+    },
+    onError: (error) => {
+      setDomainMessage({ type: "error", text: error instanceof Error ? error.message : "Failed to add domain" });
     },
   });
 
@@ -179,6 +187,11 @@ function SiteDetailPage() {
   const deleteDomainMutation = useMutation({
     mutationFn: (domainId: string) => hostingApi.deleteDomain(siteId, domainId),
     onSuccess: () => {
+      setDomainMessage({ type: "success", text: "Domain removed." });
+      queryClient.invalidateQueries({ queryKey: ["hosting", siteId] });
+    },
+    onError: (error) => {
+      setDomainMessage({ type: "error", text: error instanceof Error ? error.message : "Failed to remove domain" });
       queryClient.invalidateQueries({ queryKey: ["hosting", siteId] });
     },
   });
@@ -626,7 +639,10 @@ function SiteDetailPage() {
                 <input
                   type="text"
                   value={hostname}
-                  onChange={(e) => setHostname(e.target.value)}
+                  onChange={(e) => {
+                    setHostname(e.target.value);
+                    setDomainMessage(null);
+                  }}
                   className="input-dark font-mono text-sm"
                   placeholder="backup.client.com"
                 />
@@ -644,6 +660,15 @@ function SiteDetailPage() {
                 <Globe2 size={14} />
                 {addDomainMutation.isPending ? "Adding..." : "Add Domain"}
               </button>
+
+              {domainMessage && (
+                <p
+                  className="text-xs font-mono"
+                  style={{ color: domainMessage.type === "error" ? "#f87171" : "#4ade80" }}
+                >
+                  {domainMessage.text}
+                </p>
+              )}
 
               {hostingData?.cnameTarget && (
                 <div className="rounded-lg p-3" style={{ backgroundColor: "#09090b", border: "1px solid #27272a" }}>

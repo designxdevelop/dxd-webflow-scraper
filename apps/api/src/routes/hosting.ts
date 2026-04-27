@@ -343,7 +343,11 @@ app.post("/:siteId/domains", zValidator("json", createDomainSchema), async (c) =
       .returning();
   } catch (error) {
     if (isPgUniqueViolation(error)) {
-      return c.json({ error: "Hostname is already configured" }, 409);
+      const existingDomain = await db.query.siteDomains.findFirst({ where: eq(siteDomains.hostname, hostname) });
+      if (existingDomain?.siteId === siteId) {
+        return c.json({ domain: existingDomain, alreadyExists: true });
+      }
+      return c.json({ error: "Hostname is already configured on another site" }, 409);
     }
     const message = error instanceof Error ? error.message : "Failed to reserve hosted domain";
     return c.json({ error: message }, 500);

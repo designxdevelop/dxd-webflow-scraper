@@ -18,6 +18,7 @@ id = "REPLACE_WITH_HYPERDRIVE_CONFIG_ID"
 NODE_ENV = "production"
 FRONTEND_URL = "https://archiver.designxdevelop.com"
 CORS_ALLOWED_ORIGINS = ""
+HOSTING_CNAME_TARGET = "backups.example.com"
 
 # Secrets (set via `wrangler secret put`):
 # - AUTH_SECRET
@@ -28,3 +29,5 @@ CORS_ALLOWED_ORIGINS = ""
 # - UPSTASH_REDIS_REST_TOKEN
 # - WORKER_SERVICE_URL
 # - WORKER_API_SECRET
+# - CLOUDFLARE_ZONE_ID
+# - CLOUDFLARE_API_TOKEN

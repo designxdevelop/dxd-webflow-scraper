@@ -7,6 +7,7 @@ import Redis from "ioredis";
 
 export interface QueueClient {
   addCrawlJob(siteId: string, crawlId: string): Promise<void>;
+  addPublicationJob(siteId: string, crawlId: string, publicationId: string, activate: boolean, autoPublish?: boolean): Promise<void>;
   removeCrawlJob(crawlId: string): Promise<void>;
 }
 
@@ -33,6 +34,17 @@ export function createNodeQueueClient(redisUrl: string): QueueClient {
   return {
     async addCrawlJob(siteId, crawlId) {
       await queue.add("crawl", { siteId, crawlId }, { jobId: crawlId });
+    },
+    async addPublicationJob(siteId, crawlId, publicationId, activate, autoPublish) {
+      const publishQueue = new Queue("publication-jobs", {
+        connection: redis,
+        defaultJobOptions: {
+          removeOnComplete: 100,
+          removeOnFail: 100,
+          attempts: 1,
+        },
+      });
+      await publishQueue.add("publish", { siteId, crawlId, publicationId, activate, autoPublish: autoPublish ?? false }, { jobId: publicationId });
     },
     async removeCrawlJob(crawlId) {
       try {
@@ -85,6 +97,20 @@ export function createHttpQueueClient(workerServiceUrl: string, apiSecret: strin
       if (!res.ok) {
         const text = await res.text();
         throw new Error(`Failed to enqueue crawl job: ${res.status} ${text}`);
+      }
+    },
+    async addPublicationJob(siteId, crawlId, publicationId, activate, autoPublish) {
+      const res = await fetch(`${baseUrl}/publish`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiSecret}`,
+        },
+        body: JSON.stringify({ siteId, crawlId, publicationId, activate, autoPublish: autoPublish ?? false }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Failed to enqueue publication job: ${res.status} ${text}`);
       }
     },
     async removeCrawlJob(crawlId) {

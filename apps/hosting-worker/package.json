@@ -1,0 +1,20 @@
+{
+  "name": "@dxd/hosting-worker",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "build": "echo 'No build needed - Wrangler bundles TypeScript'",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@dxd/db": "workspace:*",
+    "drizzle-orm": "^0.44.2",
+    "postgres": "^3.4.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241230.0",
+    "typescript": "^5.9.3",
+    "wrangler": "^3.99.0"
+  }
+}

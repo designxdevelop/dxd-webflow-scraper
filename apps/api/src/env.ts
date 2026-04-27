@@ -30,6 +30,11 @@ export type Bindings = {
   WORKER_SERVICE_URL: string;
   WORKER_API_SECRET: string;
 
+  // Static backup hosting
+  HOSTING_CNAME_TARGET?: string;
+  CLOUDFLARE_ZONE_ID?: string;
+  CLOUDFLARE_API_TOKEN?: string;
+
   // Storage env vars (used by Node entry only, for backward compat)
   STORAGE_TYPE?: string;
   S3_ENDPOINT?: string;

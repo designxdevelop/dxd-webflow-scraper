@@ -9,6 +9,7 @@ import {
   timestamp,
   jsonb,
   primaryKey,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import type { AdapterAccountType } from "@auth/core/adapters";
@@ -110,6 +111,12 @@ export const sites = pgTable("sites", {
   storageType: varchar("storage_type", { length: 50 }).default("local"),
   storagePath: varchar("storage_path", { length: 500 }),
 
+  // Hosting/billing
+  hostingAutoPublish: boolean("hosting_auto_publish").default(true),
+  hostingBillingEmail: varchar("hosting_billing_email", { length: 255 }),
+  hostingPaymentLinkUrl: varchar("hosting_payment_link_url", { length: 1000 }),
+  hostingBillingStatus: varchar("hosting_billing_status", { length: 50 }).default("not_sent"),
+
   // Metadata
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
@@ -163,9 +170,47 @@ export const settings = pgTable("settings", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 });
 
+export const sitePublications = pgTable("site_publications", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  siteId: uuid("site_id").notNull().references(() => sites.id, { onDelete: "cascade" }),
+  crawlId: uuid("crawl_id").notNull().references(() => crawls.id, { onDelete: "cascade" }),
+  status: varchar("status", { length: 50 }).notNull().default("pending"),
+  r2Prefix: varchar("r2_prefix", { length: 500 }).notNull(),
+  fileCount: integer("file_count"),
+  totalBytes: bigint("total_bytes", { mode: "number" }),
+  errorMessage: text("error_message"),
+  publishedAt: timestamp("published_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
+export const siteDomains = pgTable(
+  "site_domains",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    siteId: uuid("site_id").notNull().references(() => sites.id, { onDelete: "cascade" }),
+    hostname: varchar("hostname", { length: 255 }).notNull(),
+    status: varchar("status", { length: 50 }).notNull().default("pending_dns"),
+    cnameTarget: varchar("cname_target", { length: 255 }).notNull(),
+    activePublicationId: uuid("active_publication_id").references(() => sitePublications.id, { onDelete: "set null" }),
+    redirectEnabled: boolean("redirect_enabled").default(false),
+    redirectTargetOrigin: varchar("redirect_target_origin", { length: 500 }),
+    cloudflareHostnameId: varchar("cloudflare_hostname_id", { length: 255 }),
+    ownershipVerificationName: varchar("ownership_verification_name", { length: 255 }),
+    ownershipVerificationValue: text("ownership_verification_value"),
+    sslStatus: varchar("ssl_status", { length: 100 }),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (domain) => [uniqueIndex("site_domains_hostname_idx").on(domain.hostname)]
+);
+
 // Relations
 export const sitesRelations = relations(sites, ({ many }) => ({
   crawls: many(crawls),
+  publications: many(sitePublications),
+  domains: many(siteDomains),
 }));
 
 export const crawlsRelations = relations(crawls, ({ one, many }) => ({
@@ -174,6 +219,30 @@ export const crawlsRelations = relations(crawls, ({ one, many }) => ({
     references: [sites.id],
   }),
   logs: many(crawlLogs),
+  publications: many(sitePublications),
+}));
+
+export const sitePublicationsRelations = relations(sitePublications, ({ one, many }) => ({
+  site: one(sites, {
+    fields: [sitePublications.siteId],
+    references: [sites.id],
+  }),
+  crawl: one(crawls, {
+    fields: [sitePublications.crawlId],
+    references: [crawls.id],
+  }),
+  domains: many(siteDomains),
+}));
+
+export const siteDomainsRelations = relations(siteDomains, ({ one }) => ({
+  site: one(sites, {
+    fields: [siteDomains.siteId],
+    references: [sites.id],
+  }),
+  activePublication: one(sitePublications, {
+    fields: [siteDomains.activePublicationId],
+    references: [sitePublications.id],
+  }),
 }));
 
 export const crawlLogsRelations = relations(crawlLogs, ({ one }) => ({
@@ -214,3 +283,7 @@ export type CrawlLog = typeof crawlLogs.$inferSelect;
 export type NewCrawlLog = typeof crawlLogs.$inferInsert;
 export type Setting = typeof settings.$inferSelect;
 export type AllowedEmail = typeof allowedEmails.$inferSelect;
+export type SitePublication = typeof sitePublications.$inferSelect;
+export type NewSitePublication = typeof sitePublications.$inferInsert;
+export type SiteDomain = typeof siteDomains.$inferSelect;
+export type NewSiteDomain = typeof siteDomains.$inferInsert;

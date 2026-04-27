@@ -59,6 +59,10 @@ export interface Site {
   nextScheduledAt: string | null;
   storageType: string | null;
   storagePath: string | null;
+  hostingAutoPublish: boolean | null;
+  hostingBillingEmail: string | null;
+  hostingPaymentLinkUrl: string | null;
+  hostingBillingStatus: string | null;
   createdAt: string;
   updatedAt: string;
   lastCrawl?: Crawl | null;
@@ -95,6 +99,40 @@ export interface CrawlLog {
   createdAt: string;
 }
 
+export interface SitePublication {
+  id: string;
+  siteId: string;
+  crawlId: string;
+  status: string;
+  r2Prefix: string;
+  fileCount: number | null;
+  totalBytes: number | null;
+  errorMessage: string | null;
+  publishedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  crawl?: Crawl;
+}
+
+export interface SiteDomain {
+  id: string;
+  siteId: string;
+  hostname: string;
+  status: string;
+  cnameTarget: string;
+  activePublicationId: string | null;
+  redirectEnabled: boolean | null;
+  redirectTargetOrigin: string | null;
+  cloudflareHostnameId: string | null;
+  ownershipVerificationName: string | null;
+  ownershipVerificationValue: string | null;
+  sslStatus: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+  activePublication?: SitePublication | null;
+}
+
 export interface CreateSiteInput {
   name: string;
   url: string;
@@ -107,6 +145,10 @@ export interface CreateSiteInput {
   redirectsCsv?: string | null;
   scheduleEnabled?: boolean;
   scheduleCron?: string | null;
+  hostingAutoPublish?: boolean;
+  hostingBillingEmail?: string | null;
+  hostingPaymentLinkUrl?: string | null;
+  hostingBillingStatus?: "not_sent" | "sent" | "paid" | "past_due" | "cancelled";
 }
 
 export interface UpdateSiteInput extends Partial<CreateSiteInput> {}
@@ -155,6 +197,128 @@ export const sitesApi = {
   startCrawl: async (id: string): Promise<{ crawl: Crawl }> => {
     const res = await fetchWithAuth(`${API_BASE}/sites/${id}/crawl`, { method: "POST" });
     return parseApiResponse<{ crawl: Crawl }>(res, "Failed to start crawl");
+  },
+};
+
+export const hostingApi = {
+  get: async (siteId: string): Promise<{
+    cnameTarget: string;
+    settings: {
+      hostingAutoPublish: boolean;
+      hostingBillingEmail: string | null;
+      hostingPaymentLinkUrl: string | null;
+      hostingBillingStatus: string;
+    };
+    publications: SitePublication[];
+    domains: SiteDomain[];
+  }> => {
+    const res = await fetchWithAuth(`${API_BASE}/sites/${siteId}/hosting`);
+    return parseApiResponse<{
+      cnameTarget: string;
+      settings: {
+        hostingAutoPublish: boolean;
+        hostingBillingEmail: string | null;
+        hostingPaymentLinkUrl: string | null;
+        hostingBillingStatus: string;
+      };
+      publications: SitePublication[];
+      domains: SiteDomain[];
+    }>(res, "Failed to fetch hosting settings");
+  },
+
+  updateSettings: async (
+    siteId: string,
+    data: {
+      hostingAutoPublish?: boolean;
+      hostingBillingEmail?: string | null;
+      hostingPaymentLinkUrl?: string | null;
+      hostingBillingStatus?: "not_sent" | "sent" | "paid" | "past_due" | "cancelled";
+    }
+  ): Promise<{
+    settings: {
+      hostingAutoPublish: boolean;
+      hostingBillingEmail: string | null;
+      hostingPaymentLinkUrl: string | null;
+      hostingBillingStatus: string;
+    };
+  }> => {
+    const res = await fetchWithAuth(`${API_BASE}/sites/${siteId}/hosting`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    return parseApiResponse<{
+      settings: {
+        hostingAutoPublish: boolean;
+        hostingBillingEmail: string | null;
+        hostingPaymentLinkUrl: string | null;
+        hostingBillingStatus: string;
+      };
+    }>(res, "Failed to update hosting settings");
+  },
+
+  publish: async (
+    siteId: string,
+    data: { crawlId?: string; activate?: boolean }
+  ): Promise<{ publication: SitePublication }> => {
+    const res = await fetchWithAuth(`${API_BASE}/sites/${siteId}/publications`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    return parseApiResponse<{ publication: SitePublication }>(res, "Failed to publish backup");
+  },
+
+  addDomain: async (siteId: string, hostname: string): Promise<{ domain: SiteDomain }> => {
+    const res = await fetchWithAuth(`${API_BASE}/sites/${siteId}/domains`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hostname }),
+    });
+    return parseApiResponse<{ domain: SiteDomain }>(res, "Failed to add domain");
+  },
+
+  syncDomain: async (siteId: string, domainId: string): Promise<{ domain: SiteDomain }> => {
+    const res = await fetchWithAuth(`${API_BASE}/sites/${siteId}/domains/${domainId}/sync`, { method: "POST" });
+    return parseApiResponse<{ domain: SiteDomain }>(res, "Failed to sync domain");
+  },
+
+  updateDomain: async (
+    siteId: string,
+    domainId: string,
+    data: { redirectEnabled?: boolean; redirectTargetOrigin?: string | null }
+  ): Promise<{ domain: SiteDomain }> => {
+    const res = await fetchWithAuth(`${API_BASE}/sites/${siteId}/domains/${domainId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    return parseApiResponse<{ domain: SiteDomain }>(res, "Failed to update domain");
+  },
+
+  activateDomain: async (
+    siteId: string,
+    domainId: string,
+    publicationId: string
+  ): Promise<{ domain: SiteDomain }> => {
+    const res = await fetchWithAuth(`${API_BASE}/sites/${siteId}/domains/${domainId}/activate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ publicationId }),
+    });
+    return parseApiResponse<{ domain: SiteDomain }>(res, "Failed to activate publication");
+  },
+
+  activatePublication: async (siteId: string, publicationId: string): Promise<{ publication: SitePublication }> => {
+    const res = await fetchWithAuth(`${API_BASE}/sites/${siteId}/publications/${publicationId}/activate`, {
+      method: "POST",
+    });
+    return parseApiResponse<{ publication: SitePublication }>(res, "Failed to activate publication");
+  },
+
+  deleteDomain: async (siteId: string, domainId: string): Promise<void> => {
+    const res = await fetchWithAuth(`${API_BASE}/sites/${siteId}/domains/${domainId}`, { method: "DELETE" });
+    await parseApiResponse<{ success: boolean }>(res, "Failed to delete domain");
   },
 };
 

@@ -11,6 +11,7 @@ import { crawlsRoutes } from "./routes/crawls.js";
 import { settingsRoutes } from "./routes/settings.js";
 import { sseRoutes } from "./routes/sse.js";
 import { previewRoutes } from "./routes/preview.js";
+import { hostingRoutes } from "./routes/hosting.js";
 
 export interface AppConfig {
   deps: AppDeps;
@@ -119,11 +120,15 @@ export function createApp(config: AppConfig) {
   app.use("/api/crawls/*", requireAuth);
   app.use("/api/settings/*", requireAuth);
   app.use("/api/sse/*", requireAuth);
+  app.use("/api/sites/*/hosting", requireAuth);
+  app.use("/api/sites/*/publications", requireAuth);
+  app.use("/api/sites/*/domains/*", requireAuth);
 
   app.route("/api/sites", sitesRoutes);
   app.route("/api/crawls", crawlsRoutes);
   app.route("/api/settings", settingsRoutes);
   app.route("/api/sse", sseRoutes);
+  app.route("/api/sites", hostingRoutes);
 
   // Defense-in-depth: keep preview responses out of search indexes.
   app.use("/preview/*", async (c, next) => {

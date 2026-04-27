@@ -96,7 +96,7 @@ async function deleteCloudflareCustomHostname(
   cloudflareHostnameId: string
 ) {
   const config = getCloudflareConfig(c);
-  if (!config) return;
+  if (!config) return false;
 
   const response = await fetch(
     `https://api.cloudflare.com/client/v4/zones/${config.zoneId}/custom_hostnames/${cloudflareHostnameId}`,
@@ -113,6 +113,8 @@ async function deleteCloudflareCustomHostname(
     const message = payload?.errors?.[0]?.message || `Cloudflare custom hostname delete failed with ${response.status}`;
     throw new Error(message);
   }
+
+  return true;
 }
 
 async function syncCloudflareCustomHostname(
@@ -161,6 +163,16 @@ function toOrigin(value: string | null | undefined): string | null {
   } catch {
     return null;
   }
+}
+
+function isPgUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof (error as { code?: unknown }).code === "string" &&
+    (error as { code: string }).code === "23505"
+  );
 }
 
 app.get("/:siteId/hosting", async (c) => {
@@ -278,43 +290,84 @@ app.post("/:siteId/domains", zValidator("json", createDomainSchema), async (c) =
     return c.json({ error: "Cloudflare custom hostname configuration is required to add client domains" }, 503);
   }
 
-  let cloudflareFields: ReturnType<typeof extractCloudflareDomainFields>;
-  try {
-    const result = await createCloudflareCustomHostname(c, hostname);
-    if (!result) {
-      return c.json({ error: "Cloudflare custom hostname provisioning is not configured" }, 503);
-    }
-    cloudflareFields = extractCloudflareDomainFields(result);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to provision Cloudflare custom hostname";
-    return c.json({ error: message }, 502);
-  }
-
   const latestPublication = await db.query.sitePublications.findFirst({
     where: and(eq(sitePublications.siteId, siteId), eq(sitePublications.status, "published")),
     orderBy: desc(sitePublications.createdAt),
   });
 
+  let reservedDomain: typeof siteDomains.$inferSelect;
   try {
-    const [domain] = await db
+    [reservedDomain] = await db
       .insert(siteDomains)
       .values({
         siteId,
         hostname,
         cnameTarget,
-        status: cloudflareFields?.status ?? "pending_dns",
+        status: "provisioning",
         activePublicationId: latestPublication?.id ?? null,
         redirectTargetOrigin: toOrigin(site.url),
-        cloudflareHostnameId: cloudflareFields?.cloudflareHostnameId,
-        ownershipVerificationName: cloudflareFields?.ownershipVerificationName,
-        ownershipVerificationValue: cloudflareFields?.ownershipVerificationValue,
-        sslStatus: cloudflareFields?.sslStatus,
       })
       .returning();
+  } catch (error) {
+    if (isPgUniqueViolation(error)) {
+      return c.json({ error: "Hostname is already configured" }, 409);
+    }
+    const message = error instanceof Error ? error.message : "Failed to reserve hosted domain";
+    return c.json({ error: message }, 500);
+  }
+
+  let cloudflareHostnameId: string | null = null;
+  try {
+    const result = await createCloudflareCustomHostname(c, hostname);
+    if (!result) {
+      throw new Error("Cloudflare custom hostname provisioning is not configured");
+    }
+
+    const cloudflareFields = extractCloudflareDomainFields(result);
+    cloudflareHostnameId = cloudflareFields.cloudflareHostnameId;
+    const [domain] = await db
+      .update(siteDomains)
+      .set({
+        status: cloudflareFields.status ?? "pending_dns",
+        cloudflareHostnameId: cloudflareFields.cloudflareHostnameId,
+        ownershipVerificationName: cloudflareFields.ownershipVerificationName,
+        ownershipVerificationValue: cloudflareFields.ownershipVerificationValue,
+        sslStatus: cloudflareFields.sslStatus,
+        errorMessage: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(siteDomains.id, reservedDomain.id))
+      .returning();
+
+    if (!domain) {
+      throw new Error("Failed to finalize hosted domain after Cloudflare provisioning");
+    }
 
     return c.json({ domain }, 201);
   } catch (error) {
-    return c.json({ error: "Hostname is already configured" }, 409);
+    if (cloudflareHostnameId) {
+      try {
+        await deleteCloudflareCustomHostname(c, cloudflareHostnameId);
+      } catch (cleanupError) {
+        const cleanupMessage = cleanupError instanceof Error ? cleanupError.message : "Unknown cleanup error";
+        await db
+          .update(siteDomains)
+          .set({
+            cloudflareHostnameId,
+            errorMessage: `Cloudflare cleanup required: ${cleanupMessage}`,
+            updatedAt: new Date(),
+          })
+          .where(eq(siteDomains.id, reservedDomain.id));
+        return c.json({ error: `Cloudflare cleanup required: ${cleanupMessage}` }, 502);
+      }
+    }
+
+    await db.delete(siteDomains).where(eq(siteDomains.id, reservedDomain.id)).catch(() => undefined);
+    const message = error instanceof Error ? error.message : "Failed to provision Cloudflare custom hostname";
+    if (message.includes("not configured")) {
+      return c.json({ error: message }, 503);
+    }
+    return c.json({ error: message }, /Cloudflare/i.test(message) ? 502 : 500);
   }
 });
 
@@ -359,6 +412,12 @@ app.post("/:siteId/domains/:domainId/sync", async (c) => {
   if (!domain.cloudflareHostnameId) return c.json({ domain });
 
   const result = await syncCloudflareCustomHostname(c, domain.cloudflareHostnameId);
+  if (!result) {
+    return c.json(
+      { error: "Cloudflare custom hostname sync is unavailable because Cloudflare configuration is missing" },
+      503
+    );
+  }
   const fields = extractCloudflareDomainFields(result);
   const [updated] = await db
     .update(siteDomains)
@@ -434,7 +493,16 @@ app.delete("/:siteId/domains/:domainId", async (c) => {
   if (!existing) return c.json({ error: "Domain not found" }, 404);
 
   if (existing.cloudflareHostnameId) {
-    await deleteCloudflareCustomHostname(c, existing.cloudflareHostnameId);
+    const deleted = await deleteCloudflareCustomHostname(c, existing.cloudflareHostnameId);
+    if (!deleted) {
+      return c.json(
+        {
+          error:
+            "Cloudflare credentials are not configured, so this domain cannot be safely removed while a custom hostname may still exist",
+        },
+        503
+      );
+    }
   }
 
   await db.delete(siteDomains).where(and(eq(siteDomains.id, domainId), eq(siteDomains.siteId, siteId)));

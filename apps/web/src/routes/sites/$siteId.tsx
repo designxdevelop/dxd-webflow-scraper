@@ -45,6 +45,9 @@ function SiteDetailPage() {
   const [hostingBillingEmail, setHostingBillingEmail] = useState("");
   const [hostingPaymentLinkUrl, setHostingPaymentLinkUrl] = useState("");
   const [hostingBillingStatus, setHostingBillingStatus] = useState<"not_sent" | "sent" | "paid" | "past_due" | "cancelled">("not_sent");
+  const [hostingSettingsInitialized, setHostingSettingsInitialized] = useState(false);
+  const [hostingSettingsDirty, setHostingSettingsDirty] = useState(false);
+  const [domainRedirectTargets, setDomainRedirectTargets] = useState<Record<string, string>>({});
 
   const site = data?.site;
 
@@ -73,11 +76,27 @@ function SiteDetailPage() {
 
   useEffect(() => {
     if (!hostingData?.settings) return;
+    if (hostingSettingsInitialized && hostingSettingsDirty) return;
     setHostingAutoPublish(hostingData.settings.hostingAutoPublish);
     setHostingBillingEmail(hostingData.settings.hostingBillingEmail ?? "");
     setHostingPaymentLinkUrl(hostingData.settings.hostingPaymentLinkUrl ?? "");
     setHostingBillingStatus((hostingData.settings.hostingBillingStatus as typeof hostingBillingStatus) || "not_sent");
-  }, [hostingData?.settings]);
+    setHostingSettingsInitialized(true);
+  }, [hostingData?.settings, hostingSettingsInitialized, hostingSettingsDirty]);
+
+  useEffect(() => {
+    if (!hostingData?.domains?.length) return;
+    setDomainRedirectTargets((prev) => {
+      const next = { ...prev };
+      for (const domain of hostingData.domains) {
+        const currentValue = prev[domain.id];
+        if (currentValue === undefined || currentValue === domain.redirectTargetOrigin || currentValue === site?.url) {
+          next[domain.id] = domain.redirectTargetOrigin || site?.url || "";
+        }
+      }
+      return next;
+    });
+  }, [hostingData?.domains, site?.url]);
 
   const configurationMutation = useMutation({
     mutationFn: (payload: {
@@ -175,6 +194,7 @@ function SiteDetailPage() {
       hostingBillingStatus?: "not_sent" | "sent" | "paid" | "past_due" | "cancelled";
     }) => hostingApi.updateSettings(siteId, payload),
     onSuccess: () => {
+      setHostingSettingsDirty(false);
       queryClient.invalidateQueries({ queryKey: ["hosting", siteId] });
       queryClient.invalidateQueries({ queryKey: ["sites", siteId] });
     },
@@ -637,6 +657,7 @@ function SiteDetailPage() {
                         checked={hostingAutoPublish}
                         onChange={(e) => {
                           setHostingAutoPublish(e.target.checked);
+                          setHostingSettingsDirty(true);
                           hostingSettingsMutation.mutate({ hostingAutoPublish: e.target.checked });
                         }}
                         style={{ accentColor: "#6366f1" }}
@@ -737,11 +758,15 @@ function SiteDetailPage() {
                     <div className="flex gap-2">
                       <input
                         type="url"
-                        defaultValue={domain.redirectTargetOrigin || site.url}
+                        value={domainRedirectTargets[domain.id] ?? (domain.redirectTargetOrigin || site.url)}
                         className="input-dark font-mono text-xs"
                         placeholder="https://client.com"
-                        onBlur={(e) => {
-                          const nextValue = e.target.value.trim();
+                        onChange={(e) => {
+                          const nextValue = e.target.value;
+                          setDomainRedirectTargets((prev) => ({ ...prev, [domain.id]: nextValue }));
+                        }}
+                        onBlur={() => {
+                          const nextValue = (domainRedirectTargets[domain.id] ?? "").trim();
                           if (nextValue && nextValue !== (domain.redirectTargetOrigin || site.url)) {
                             updateDomainMutation.mutate({ domainId: domain.id, redirectTargetOrigin: nextValue });
                           }
@@ -775,20 +800,29 @@ function SiteDetailPage() {
                 <input
                   type="email"
                   value={hostingBillingEmail}
-                  onChange={(e) => setHostingBillingEmail(e.target.value)}
+                  onChange={(e) => {
+                    setHostingSettingsDirty(true);
+                    setHostingBillingEmail(e.target.value);
+                  }}
                   className="input-dark font-mono text-sm"
                   placeholder="owner@client.com"
                 />
                 <input
                   type="url"
                   value={hostingPaymentLinkUrl}
-                  onChange={(e) => setHostingPaymentLinkUrl(e.target.value)}
+                  onChange={(e) => {
+                    setHostingSettingsDirty(true);
+                    setHostingPaymentLinkUrl(e.target.value);
+                  }}
                   className="input-dark font-mono text-sm"
                   placeholder="https://buy.stripe.com/..."
                 />
                 <select
                   value={hostingBillingStatus}
-                  onChange={(e) => setHostingBillingStatus(e.target.value as typeof hostingBillingStatus)}
+                  onChange={(e) => {
+                    setHostingSettingsDirty(true);
+                    setHostingBillingStatus(e.target.value as typeof hostingBillingStatus);
+                  }}
                   className="input-dark font-mono text-sm"
                 >
                   <option value="not_sent">not_sent</option>

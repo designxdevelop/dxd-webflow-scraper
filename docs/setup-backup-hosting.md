@@ -145,13 +145,13 @@ You can do that through either:
 In the `designxdevelop.com` Cloudflare zone:
 
 1. Enable/configure Cloudflare for SaaS / Custom Hostnames.
-2. Set the fallback origin/target to:
+1. Set the fallback origin/target to:
 
 ```txt
 backup-hosting.designxdevelop.com
 ```
 
-3. Ensure custom hostnames can be created for client domains like:
+1. Ensure custom hostnames can be created for client domains like:
 
 ```txt
 backup.client.com
@@ -251,21 +251,21 @@ These migrations add:
 For each client:
 
 1. Open the site in the internal dashboard.
-2. Add their backup hostname, for example:
+1. Add their backup hostname, for example:
 
 ```txt
 backup.client.com
 ```
 
-3. Give the client this CNAME instruction:
+1. Give the client this CNAME instruction:
 
 ```txt
 backup.client.com CNAME backup-hosting.designxdevelop.com
 ```
 
-4. If Cloudflare returns TXT verification records, give those to the client too.
-5. Click `Sync` in the dashboard until Cloudflare/SSL status becomes active.
-6. Publish a completed crawl or wait for the next successful crawl to auto-publish.
+1. If Cloudflare returns TXT verification records, give those to the client too.
+1. Click `Sync` in the dashboard until Cloudflare/SSL status becomes active.
+1. Publish a completed crawl or wait for the next successful crawl to auto-publish.
 
 ## Operating Modes
 

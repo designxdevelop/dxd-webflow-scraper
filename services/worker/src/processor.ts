@@ -660,6 +660,10 @@ function isArchiveQueueStatus(status: string | null | undefined): boolean {
   return status === "archiving" || status === "uploading";
 }
 
+function isPublicationQueueStatus(status: string | null | undefined): boolean {
+  return status === "pending" || status === "publishing";
+}
+
 async function publishLogAndPersist(crawlId: string, level: LogLevel, message: string): Promise<void> {
   await publishEvent(crawlId, {
     type: "log",
@@ -731,71 +735,73 @@ async function resolveArchiveResult(job: ArchiveJobData) {
 }
 
 async function processPublicationJob(job: Job<PublicationJobData>): Promise<void> {
-  const { siteId, crawlId, publicationId, activate, autoPublish } = job.data;
+  return runExclusiveWorkerJob(async () => {
+    const { siteId, crawlId, publicationId, activate, autoPublish } = job.data;
 
-  await db
-    .update(sitePublications)
-    .set({ status: "publishing", errorMessage: null, updatedAt: new Date() })
-    .where(eq(sitePublications.id, publicationId));
-
-  try {
-    const publication = await db.query.sitePublications.findFirst({
-      where: and(
-        eq(sitePublications.id, publicationId),
-        eq(sitePublications.siteId, siteId),
-        eq(sitePublications.crawlId, crawlId)
-      ),
-    });
-    if (!publication) {
-      throw new UnrecoverableError(`Publication ${publicationId} not found`);
-    }
-
-    const crawl = await db.query.crawls.findFirst({
-      where: and(eq(crawls.id, crawlId), eq(crawls.siteId, siteId)),
-    });
-    if (!crawl || crawl.status !== "completed" || !crawl.outputPath) {
-      throw new UnrecoverableError(`Crawl ${crawlId} is not publishable`);
-    }
-
-    const archivePath = getArchiveStoragePath(crawl.outputPath);
-    const archiveExists = await storage.exists(archivePath);
-    if (!archiveExists) {
-      throw new UnrecoverableError(`Archive not found at ${archivePath}`);
-    }
-
-    const result = await publishZipArchiveToR2(publicationId, archivePath, publication.r2Prefix);
     await db
       .update(sitePublications)
-      .set({
-        status: "published",
-        fileCount: result.fileCount,
-        totalBytes: result.totalBytes,
-        publishedAt: new Date(),
-        updatedAt: new Date(),
-      })
+      .set({ status: "publishing", errorMessage: null, updatedAt: new Date() })
       .where(eq(sitePublications.id, publicationId));
 
-    if (activate) {
-      if (autoPublish) {
-        const site = await db.query.sites.findFirst({ where: eq(sites.id, siteId) });
-        if (!site?.hostingAutoPublish) {
-          return;
-        }
+    try {
+      const publication = await db.query.sitePublications.findFirst({
+        where: and(
+          eq(sitePublications.id, publicationId),
+          eq(sitePublications.siteId, siteId),
+          eq(sitePublications.crawlId, crawlId)
+        ),
+      });
+      if (!publication) {
+        throw new UnrecoverableError(`Publication ${publicationId} not found`);
       }
 
+      const crawl = await db.query.crawls.findFirst({
+        where: and(eq(crawls.id, crawlId), eq(crawls.siteId, siteId)),
+      });
+      if (!crawl || crawl.status !== "completed" || !crawl.outputPath) {
+        throw new UnrecoverableError(`Crawl ${crawlId} is not publishable`);
+      }
+
+      const archivePath = getArchiveStoragePath(crawl.outputPath);
+      const archiveExists = await storage.exists(archivePath);
+      if (!archiveExists) {
+        throw new UnrecoverableError(`Archive not found at ${archivePath}`);
+      }
+
+      const result = await publishZipArchiveToR2(publicationId, archivePath, publication.r2Prefix);
       await db
-        .update(siteDomains)
-        .set({ activePublicationId: publicationId, updatedAt: new Date() })
-        .where(eq(siteDomains.siteId, siteId));
+        .update(sitePublications)
+        .set({
+          status: "published",
+          fileCount: result.fileCount,
+          totalBytes: result.totalBytes,
+          publishedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(sitePublications.id, publicationId));
+
+      if (activate) {
+        if (autoPublish) {
+          const site = await db.query.sites.findFirst({ where: eq(sites.id, siteId) });
+          if (!site?.hostingAutoPublish) {
+            return;
+          }
+        }
+
+        await db
+          .update(siteDomains)
+          .set({ activePublicationId: publicationId, updatedAt: new Date() })
+          .where(eq(siteDomains.siteId, siteId));
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown publication error";
+      await db
+        .update(sitePublications)
+        .set({ status: "failed", errorMessage: message, updatedAt: new Date() })
+        .where(eq(sitePublications.id, publicationId));
+      throw error;
     }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown publication error";
-    await db
-      .update(sitePublications)
-      .set({ status: "failed", errorMessage: message, updatedAt: new Date() })
-      .where(eq(sitePublications.id, publicationId));
-    throw error;
-  }
+  });
 }
 
 async function processArchiveJob(job: Job<ArchiveJobData>) {
@@ -865,7 +871,8 @@ async function processArchiveJob(job: Job<ArchiveJobData>) {
       outputSize = uploaded.outputSize;
     } catch (error) {
       if (error instanceof CrawlCancelledError) {
-        await publishLogAndPersist(crawlId, "warn", `Archive aborted: ${error.message}`);
+        const cancelMessage = error instanceof Error ? error.message : "Archive cancelled";
+        await publishLogAndPersist(crawlId, "warn", `Archive aborted: ${cancelMessage}`);
         return;
       }
       throw error;
@@ -1292,6 +1299,89 @@ async function reconcileOrphanedCrawls(orphanGraceMs = getWorkerRuntimeConfig().
   }
 }
 
+async function reconcileOrphanedPublications(
+  orphanGraceMs = getWorkerRuntimeConfig().orphanGraceMs
+): Promise<void> {
+  const cutoff = new Date(Date.now() - orphanGraceMs);
+  const possiblyOrphaned = await db.query.sitePublications.findMany({
+    where: and(
+      inArray(sitePublications.status, ["pending", "publishing"]),
+      lte(sitePublications.createdAt, cutoff)
+    ),
+    limit: 50,
+  });
+
+  if (possiblyOrphaned.length === 0) {
+    return;
+  }
+
+  console.log(
+    `[Worker] Orphan check: Found ${possiblyOrphaned.length} publications older than ${orphanGraceMs}ms in active states`
+  );
+
+  for (const publication of possiblyOrphaned) {
+    const queueJob = await publicationQueue.getJob(publication.id);
+    const ageMinutes = publication.createdAt
+      ? Math.round((Date.now() - publication.createdAt.getTime()) / 60000)
+      : 0;
+
+    if (!queueJob) {
+      if (publication.status && isPublicationQueueStatus(publication.status)) {
+        try {
+          await enqueuePublicationJob({
+            siteId: publication.siteId,
+            crawlId: publication.crawlId,
+            publicationId: publication.id,
+            activate: true,
+            autoPublish: true,
+          });
+          const requeueMsg = `RE-ENQUEUED orphaned publication job ${publication.id} (status: ${publication.status}, age: ${ageMinutes}min, reason: worker crash/restart)`;
+          console.warn(`[Worker] ${requeueMsg}`);
+          continue;
+        } catch (error) {
+          console.error(`[Worker] Failed to re-enqueue orphaned publication ${publication.id}`, error);
+        }
+      }
+
+      const failMsg = `Publication marked failed automatically: no queue job found for ${publication.status} publication (age: ${ageMinutes}min)`;
+      console.warn(`[Worker] ${failMsg}: ${publication.id}`);
+
+      await db
+        .update(sitePublications)
+        .set({
+          status: "failed",
+          errorMessage: failMsg,
+          updatedAt: new Date(),
+        })
+        .where(eq(sitePublications.id, publication.id));
+      continue;
+    }
+
+    const state = await queueJob.getState();
+    if (
+      state === "active" ||
+      state === "waiting" ||
+      state === "delayed" ||
+      state === "prioritized" ||
+      state === "waiting-children"
+    ) {
+      continue;
+    }
+
+    const terminalMsg = `Publication marked failed automatically: queue job in terminal state "${state}" (age: ${ageMinutes}min)`;
+    console.warn(`[Worker] ${terminalMsg}: ${publication.id}`);
+
+    await db
+      .update(sitePublications)
+      .set({
+        status: "failed",
+        errorMessage: terminalMsg,
+        updatedAt: new Date(),
+      })
+      .where(eq(sitePublications.id, publication.id));
+  }
+}
+
 function attachWorkerLogging<T>(worker: Worker<T>, label: string, reconcileTimer: ReturnType<typeof setInterval>) {
   worker.on("completed", (completedJob) => {
     console.log(`[Worker] ${label} job completed: ${completedJob.id} (attempt ${completedJob.attemptsMade + 1}/${completedJob.opts.attempts ?? 1})`);
@@ -1327,6 +1417,13 @@ function attachWorkerLogging<T>(worker: Worker<T>, label: string, reconcileTimer
 export function startWorker() {
   const config = getWorkerRuntimeConfig();
 
+  void reconcileOrphanedCrawls(config.orphanGraceMs).catch((error) => {
+    console.error("[Worker] Failed to reconcile orphaned crawls:", error);
+  });
+  void reconcileOrphanedPublications(config.orphanGraceMs).catch((error) => {
+    console.error("[Worker] Failed to reconcile orphaned publications:", error);
+  });
+
   const crawlWorker = new Worker<CrawlJobData>("crawl-jobs", processCrawlJob, {
     connection: workerConnection,
     concurrency: config.crawlConcurrency,
@@ -1356,13 +1453,12 @@ export function startWorker() {
     skipLockRenewal: config.skipLockRenewal,
   });
 
-  void reconcileOrphanedCrawls(config.orphanGraceMs).catch((error) => {
-    console.error("[Worker] Failed to reconcile orphaned crawls:", error);
-  });
-
   const reconcileTimer = setInterval(() => {
     void reconcileOrphanedCrawls(config.orphanGraceMs).catch((error) => {
       console.error("[Worker] Failed to reconcile orphaned crawls:", error);
+    });
+    void reconcileOrphanedPublications(config.orphanGraceMs).catch((error) => {
+      console.error("[Worker] Failed to reconcile orphaned publications:", error);
     });
   }, config.reconcileIntervalMs);
   reconcileTimer.unref();

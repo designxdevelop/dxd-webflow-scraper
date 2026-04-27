@@ -92,4 +92,59 @@ describe("hosting routes", () => {
     assert.equal(payload.alreadyExists, true);
     assert.deepEqual(payload.domain, existingDomain);
   });
+
+  it("returns the existing same-site domain when Drizzle wraps a hostname unique constraint", async () => {
+    const existingDomain = {
+      id: "domain-1",
+      siteId: "site-1",
+      hostname: "backup.example.com",
+      cnameTarget: "hosting.example.com",
+      status: "pending_dns",
+    };
+    const app = new Hono();
+    const db = {
+      query: {
+        sites: {
+          findFirst: async () => ({ id: "site-1", url: "https://example.com" }),
+        },
+        sitePublications: { findFirst: async () => null },
+        siteDomains: { findFirst: async () => existingDomain },
+      },
+      insert: () => ({
+        values: () => ({
+          returning: async () => {
+            throw new Error(
+              'Failed query: insert into "site_domains" values (...) returning "id"\nparams: site-1,backup.example.com',
+              { cause: { code: "23505", constraint_name: "site_domains_hostname_idx" } }
+            );
+          },
+        }),
+      }),
+    };
+
+    app.use("*", async (c, next) => {
+      c.set("db", db);
+      await next();
+    });
+    app.route("/api/sites", hostingRoutes);
+
+    const response = await app.request(
+      "/api/sites/site-1/domains",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ hostname: "backup.example.com" }),
+      },
+      {
+        HOSTING_CNAME_TARGET: "hosting.example.com",
+        CLOUDFLARE_ZONE_ID: "zone-1",
+        CLOUDFLARE_API_TOKEN: "token-1",
+      }
+    );
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.alreadyExists, true);
+    assert.deepEqual(payload.domain, existingDomain);
+  });
 });

@@ -199,13 +199,16 @@ function toOrigin(value: string | null | undefined): string | null {
 }
 
 function isPgUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    typeof (error as { code?: unknown }).code === "string" &&
-    (error as { code: string }).code === "23505"
-  );
+  let current: unknown = error;
+  while (typeof current === "object" && current !== null) {
+    const maybeError = current as { code?: unknown; cause?: unknown; message?: unknown };
+    if (maybeError.code === "23505") return true;
+    if (typeof maybeError.message === "string" && maybeError.message.includes("site_domains_hostname_idx")) {
+      return true;
+    }
+    current = maybeError.cause;
+  }
+  return false;
 }
 
 app.get("/:siteId/hosting", async (c) => {

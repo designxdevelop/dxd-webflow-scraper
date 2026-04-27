@@ -11,12 +11,15 @@ import {
 } from "@dxd/scraper";
 import { getStorage } from "@dxd/storage";
 import type { MultipartUploadProgress } from "@dxd/storage/adapter";
-import { db, sites, crawls, crawlLogs, settings } from "./db.js";
+import { db, sites, crawls, crawlLogs, settings, sitePublications, siteDomains } from "./db.js";
 import fs from "node:fs/promises";
 import nodeFs from "node:fs";
 import path from "node:path";
 import archiver from "archiver";
+import unzipper from "unzipper";
 import { once } from "node:events";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { captureMemorySnapshot, formatMemorySnapshot, type MemorySnapshot } from "./memory.js";
 import { getWorkerRuntimeConfig } from "./worker-config.js";
 
@@ -56,6 +59,16 @@ const archiveQueue = new Queue<ArchiveJobData>("archive-jobs", {
   },
 });
 
+const publicationQueue = new Queue<PublicationJobData>("publication-jobs", {
+  connection: workerConnection,
+  defaultJobOptions: {
+    attempts: 1,
+    removeOnComplete: { count: 10 },
+    removeOnFail: { count: 50 },
+    backoff: { type: "fixed", delay: 0 },
+  },
+});
+
 interface CrawlJobData {
   siteId: string;
   crawlId: string;
@@ -67,6 +80,14 @@ interface ArchiveJobData {
   finalStatus: "completed" | "timed_out";
   errorMessage?: string | null;
   crawlResult?: Pick<CrawlResult, "total" | "succeeded" | "failed" | "durationMs">;
+}
+
+interface PublicationJobData {
+  siteId: string;
+  crawlId: string;
+  publicationId: string;
+  activate: boolean;
+  autoPublish?: boolean;
 }
 
 function createExclusiveRunner() {
@@ -333,6 +354,61 @@ function isBadFileDescriptorError(error: unknown): boolean {
   );
 }
 
+function getArchiveStoragePath(outputPath: string): string {
+  return outputPath.endsWith(".zip") ? outputPath : `${outputPath}.zip`;
+}
+
+function toSafePublishedKey(prefix: string, zipEntryPath: string): string | null {
+  const normalized = path.posix.normalize(zipEntryPath.replace(/\\/g, "/"));
+  if (!normalized || normalized === "." || normalized.startsWith("../") || path.posix.isAbsolute(normalized)) {
+    return null;
+  }
+  return `${prefix.replace(/\/+$/, "")}/${normalized}`;
+}
+
+async function downloadStorageObjectToFile(storagePath: string, localPath: string): Promise<void> {
+  await pipeline(
+    Readable.fromWeb(storage.readStream(storagePath) as any),
+    nodeFs.createWriteStream(localPath)
+  );
+}
+
+async function publishZipArchiveToR2(publicationId: string, archivePath: string, prefix: string) {
+  const tempDir = await storage.createTempDir(`publish-${publicationId}`);
+  const localZipPath = path.join(tempDir, "archive.zip");
+  let fileCount = 0;
+  let totalBytes = 0;
+
+  try {
+    await downloadStorageObjectToFile(archivePath, localZipPath);
+    await storage.deleteDir(prefix).catch(() => undefined);
+
+    const directory = await unzipper.Open.file(localZipPath);
+    for (const entry of directory.files) {
+      if (entry.type !== "File") continue;
+
+      const key = toSafePublishedKey(prefix, entry.path);
+      if (!key) continue;
+
+      await storage.writeStream(
+        key,
+        Readable.toWeb(entry.stream()) as unknown as ReadableStream<Uint8Array>,
+        { totalSize: entry.uncompressedSize }
+      );
+      fileCount += 1;
+      totalBytes += entry.uncompressedSize;
+    }
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+
+  if (fileCount === 0) {
+    throw new Error("Archive did not contain any publishable files");
+  }
+
+  return { fileCount, totalBytes };
+}
+
 async function uploadArchiveFromTempDir(
   crawlId: string,
   outputDir: string,
@@ -584,6 +660,10 @@ function isArchiveQueueStatus(status: string | null | undefined): boolean {
   return status === "archiving" || status === "uploading";
 }
 
+function isPublicationQueueStatus(status: string | null | undefined): boolean {
+  return status === "pending" || status === "publishing";
+}
+
 async function publishLogAndPersist(crawlId: string, level: LogLevel, message: string): Promise<void> {
   await publishEvent(crawlId, {
     type: "log",
@@ -606,6 +686,40 @@ async function enqueueArchiveJob(data: ArchiveJobData): Promise<void> {
   });
 }
 
+async function enqueuePublicationJob(data: PublicationJobData): Promise<void> {
+  await publicationQueue.add("publish", data, {
+    jobId: data.publicationId,
+    attempts: 1,
+  });
+}
+
+async function enqueueAutoPublication(siteId: string, crawlId: string): Promise<void> {
+  const site = await db.query.sites.findFirst({ where: eq(sites.id, siteId) });
+  if (!site?.hostingAutoPublish) {
+    return;
+  }
+
+  const publicationId = crypto.randomUUID();
+  const [publication] = await db
+    .insert(sitePublications)
+    .values({
+      id: publicationId,
+      siteId,
+      crawlId,
+      status: "pending",
+      r2Prefix: `published/${siteId}/${publicationId}`,
+    })
+    .returning();
+
+  await enqueuePublicationJob({
+    siteId,
+    crawlId,
+    publicationId: publication.id,
+    activate: true,
+    autoPublish: true,
+  });
+}
+
 async function resolveArchiveResult(job: ArchiveJobData) {
   const crawl = await db.query.crawls.findFirst({ where: eq(crawls.id, job.crawlId) });
   if (!crawl) {
@@ -618,6 +732,76 @@ async function resolveArchiveResult(job: ArchiveJobData) {
   }
 
   return { crawl, site };
+}
+
+async function processPublicationJob(job: Job<PublicationJobData>): Promise<void> {
+  return runExclusiveWorkerJob(async () => {
+    const { siteId, crawlId, publicationId, activate, autoPublish } = job.data;
+
+    await db
+      .update(sitePublications)
+      .set({ status: "publishing", errorMessage: null, updatedAt: new Date() })
+      .where(eq(sitePublications.id, publicationId));
+
+    try {
+      const publication = await db.query.sitePublications.findFirst({
+        where: and(
+          eq(sitePublications.id, publicationId),
+          eq(sitePublications.siteId, siteId),
+          eq(sitePublications.crawlId, crawlId)
+        ),
+      });
+      if (!publication) {
+        throw new UnrecoverableError(`Publication ${publicationId} not found`);
+      }
+
+      const crawl = await db.query.crawls.findFirst({
+        where: and(eq(crawls.id, crawlId), eq(crawls.siteId, siteId)),
+      });
+      if (!crawl || crawl.status !== "completed" || !crawl.outputPath) {
+        throw new UnrecoverableError(`Crawl ${crawlId} is not publishable`);
+      }
+
+      const archivePath = getArchiveStoragePath(crawl.outputPath);
+      const archiveExists = await storage.exists(archivePath);
+      if (!archiveExists) {
+        throw new UnrecoverableError(`Archive not found at ${archivePath}`);
+      }
+
+      const result = await publishZipArchiveToR2(publicationId, archivePath, publication.r2Prefix);
+      await db
+        .update(sitePublications)
+        .set({
+          status: "published",
+          fileCount: result.fileCount,
+          totalBytes: result.totalBytes,
+          publishedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(sitePublications.id, publicationId));
+
+      if (activate) {
+        if (autoPublish) {
+          const site = await db.query.sites.findFirst({ where: eq(sites.id, siteId) });
+          if (!site?.hostingAutoPublish) {
+            return;
+          }
+        }
+
+        await db
+          .update(siteDomains)
+          .set({ activePublicationId: publicationId, updatedAt: new Date() })
+          .where(eq(siteDomains.siteId, siteId));
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown publication error";
+      await db
+        .update(sitePublications)
+        .set({ status: "failed", errorMessage: message, updatedAt: new Date() })
+        .where(eq(sitePublications.id, publicationId));
+      throw error;
+    }
+  });
 }
 
 async function processArchiveJob(job: Job<ArchiveJobData>) {
@@ -687,7 +871,8 @@ async function processArchiveJob(job: Job<ArchiveJobData>) {
       outputSize = uploaded.outputSize;
     } catch (error) {
       if (error instanceof CrawlCancelledError) {
-        await publishLogAndPersist(crawlId, "warn", `Archive aborted: ${error.message}`);
+        const cancelMessage = error instanceof Error ? error.message : "Archive cancelled";
+        await publishLogAndPersist(crawlId, "warn", `Archive aborted: ${cancelMessage}`);
         return;
       }
       throw error;
@@ -739,6 +924,16 @@ async function processArchiveJob(job: Job<ArchiveJobData>) {
     );
 
     await pruneOldArchives(siteId, site.maxArchivesToKeep ?? Number.POSITIVE_INFINITY, crawlId);
+    if (finalStatus === "completed") {
+      try {
+        await enqueueAutoPublication(siteId, crawlId);
+        await publishLogAndPersist(crawlId, "info", "Queued hosted backup publish for latest successful crawl");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown hosted backup publish error";
+        await publishLogAndPersist(crawlId, "warn", `Failed to queue hosted backup publish: ${message}`);
+      }
+    }
+
     console.log(`[Worker] Archive completed: ${crawlId} (${finalStatus})`);
   });
 }
@@ -1104,6 +1299,89 @@ async function reconcileOrphanedCrawls(orphanGraceMs = getWorkerRuntimeConfig().
   }
 }
 
+async function reconcileOrphanedPublications(
+  orphanGraceMs = getWorkerRuntimeConfig().orphanGraceMs
+): Promise<void> {
+  const cutoff = new Date(Date.now() - orphanGraceMs);
+  const possiblyOrphaned = await db.query.sitePublications.findMany({
+    where: and(
+      inArray(sitePublications.status, ["pending", "publishing"]),
+      lte(sitePublications.createdAt, cutoff)
+    ),
+    limit: 50,
+  });
+
+  if (possiblyOrphaned.length === 0) {
+    return;
+  }
+
+  console.log(
+    `[Worker] Orphan check: Found ${possiblyOrphaned.length} publications older than ${orphanGraceMs}ms in active states`
+  );
+
+  for (const publication of possiblyOrphaned) {
+    const queueJob = await publicationQueue.getJob(publication.id);
+    const ageMinutes = publication.createdAt
+      ? Math.round((Date.now() - publication.createdAt.getTime()) / 60000)
+      : 0;
+
+    if (!queueJob) {
+      if (publication.status && isPublicationQueueStatus(publication.status)) {
+        try {
+          await enqueuePublicationJob({
+            siteId: publication.siteId,
+            crawlId: publication.crawlId,
+            publicationId: publication.id,
+            activate: true,
+            autoPublish: true,
+          });
+          const requeueMsg = `RE-ENQUEUED orphaned publication job ${publication.id} (status: ${publication.status}, age: ${ageMinutes}min, reason: worker crash/restart)`;
+          console.warn(`[Worker] ${requeueMsg}`);
+          continue;
+        } catch (error) {
+          console.error(`[Worker] Failed to re-enqueue orphaned publication ${publication.id}`, error);
+        }
+      }
+
+      const failMsg = `Publication marked failed automatically: no queue job found for ${publication.status} publication (age: ${ageMinutes}min)`;
+      console.warn(`[Worker] ${failMsg}: ${publication.id}`);
+
+      await db
+        .update(sitePublications)
+        .set({
+          status: "failed",
+          errorMessage: failMsg,
+          updatedAt: new Date(),
+        })
+        .where(eq(sitePublications.id, publication.id));
+      continue;
+    }
+
+    const state = await queueJob.getState();
+    if (
+      state === "active" ||
+      state === "waiting" ||
+      state === "delayed" ||
+      state === "prioritized" ||
+      state === "waiting-children"
+    ) {
+      continue;
+    }
+
+    const terminalMsg = `Publication marked failed automatically: queue job in terminal state "${state}" (age: ${ageMinutes}min)`;
+    console.warn(`[Worker] ${terminalMsg}: ${publication.id}`);
+
+    await db
+      .update(sitePublications)
+      .set({
+        status: "failed",
+        errorMessage: terminalMsg,
+        updatedAt: new Date(),
+      })
+      .where(eq(sitePublications.id, publication.id));
+  }
+}
+
 function attachWorkerLogging<T>(worker: Worker<T>, label: string, reconcileTimer: ReturnType<typeof setInterval>) {
   worker.on("completed", (completedJob) => {
     console.log(`[Worker] ${label} job completed: ${completedJob.id} (attempt ${completedJob.attemptsMade + 1}/${completedJob.opts.attempts ?? 1})`);
@@ -1139,6 +1417,13 @@ function attachWorkerLogging<T>(worker: Worker<T>, label: string, reconcileTimer
 export function startWorker() {
   const config = getWorkerRuntimeConfig();
 
+  void reconcileOrphanedCrawls(config.orphanGraceMs).catch((error) => {
+    console.error("[Worker] Failed to reconcile orphaned crawls:", error);
+  });
+  void reconcileOrphanedPublications(config.orphanGraceMs).catch((error) => {
+    console.error("[Worker] Failed to reconcile orphaned publications:", error);
+  });
+
   const crawlWorker = new Worker<CrawlJobData>("crawl-jobs", processCrawlJob, {
     connection: workerConnection,
     concurrency: config.crawlConcurrency,
@@ -1159,27 +1444,37 @@ export function startWorker() {
     skipLockRenewal: config.skipLockRenewal,
   });
 
-  void reconcileOrphanedCrawls(config.orphanGraceMs).catch((error) => {
-    console.error("[Worker] Failed to reconcile orphaned crawls:", error);
+  const publicationWorker = new Worker<PublicationJobData>("publication-jobs", processPublicationJob, {
+    connection: workerConnection,
+    concurrency: 1,
+    lockDuration: config.lockDuration,
+    stalledInterval: config.stalledInterval,
+    maxStalledCount: 0,
+    skipLockRenewal: config.skipLockRenewal,
   });
 
   const reconcileTimer = setInterval(() => {
     void reconcileOrphanedCrawls(config.orphanGraceMs).catch((error) => {
       console.error("[Worker] Failed to reconcile orphaned crawls:", error);
     });
+    void reconcileOrphanedPublications(config.orphanGraceMs).catch((error) => {
+      console.error("[Worker] Failed to reconcile orphaned publications:", error);
+    });
   }, config.reconcileIntervalMs);
   reconcileTimer.unref();
 
   attachWorkerLogging(crawlWorker, "crawl", reconcileTimer);
   attachWorkerLogging(archiveWorker, "archive", reconcileTimer);
+  attachWorkerLogging(publicationWorker, "publication", reconcileTimer);
 
   console.log(
-    `[Worker] Started crawl worker (concurrency=${config.crawlConcurrency}) and archive worker (concurrency=${config.archiveConcurrency}, lockDuration=${config.lockDuration}ms)`
+    `[Worker] Started crawl worker (concurrency=${config.crawlConcurrency}), archive worker (concurrency=${config.archiveConcurrency}), and publication worker (concurrency=1, lockDuration=${config.lockDuration}ms)`
   );
 
   return {
     async close() {
       clearInterval(reconcileTimer);
+      await publicationWorker.close();
       await archiveWorker.close();
       await crawlWorker.close();
     },

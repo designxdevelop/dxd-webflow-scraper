@@ -1,10 +1,10 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { sitesApi, crawlsApi } from "@/lib/api";
+import { sitesApi, crawlsApi, hostingApi } from "@/lib/api";
 import { formatToMountainTime } from "@/lib/date";
 import { parseCron, toCronExpression, type ScheduleFrequency, WEEKDAYS } from "@/lib/schedule";
-import { ArrowLeft, Play, ExternalLink, Trash2, Download, Save } from "lucide-react";
+import { ArrowLeft, Play, ExternalLink, Trash2, Download, Save, Globe2, UploadCloud, RefreshCw, CreditCard } from "lucide-react";
 import { useEffect, useState } from "react";
 
 export const Route = createFileRoute("/sites/$siteId")({
@@ -22,6 +22,12 @@ function SiteDetailPage() {
     refetchInterval: 10000,
   });
 
+  const { data: hostingData } = useQuery({
+    queryKey: ["hosting", siteId],
+    queryFn: () => hostingApi.get(siteId),
+    refetchInterval: 10000,
+  });
+
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
   const [scheduleFrequency, setScheduleFrequency] = useState<ScheduleFrequency>("daily");
   const [scheduleTime, setScheduleTime] = useState("05:00");
@@ -34,6 +40,14 @@ function SiteDetailPage() {
   const [maxArchivesToKeepInput, setMaxArchivesToKeepInput] = useState("");
   const [removeWebflowBadge, setRemoveWebflowBadge] = useState(true);
   const [downloadBlacklistText, setDownloadBlacklistText] = useState("");
+  const [hostname, setHostname] = useState("");
+  const [hostingAutoPublish, setHostingAutoPublish] = useState(true);
+  const [hostingBillingEmail, setHostingBillingEmail] = useState("");
+  const [hostingPaymentLinkUrl, setHostingPaymentLinkUrl] = useState("");
+  const [hostingBillingStatus, setHostingBillingStatus] = useState<"not_sent" | "sent" | "paid" | "past_due" | "cancelled">("not_sent");
+  const [hostingSettingsInitialized, setHostingSettingsInitialized] = useState(false);
+  const [hostingSettingsDirty, setHostingSettingsDirty] = useState(false);
+  const [domainRedirectTargets, setDomainRedirectTargets] = useState<Record<string, string>>({});
 
   const site = data?.site;
 
@@ -59,6 +73,30 @@ function SiteDetailPage() {
     setScheduleDays(parsed.days);
     setScheduleMonthlyDay(parsed.monthlyDay);
   }, [site]);
+
+  useEffect(() => {
+    if (!hostingData?.settings) return;
+    if (hostingSettingsInitialized && hostingSettingsDirty) return;
+    setHostingAutoPublish(hostingData.settings.hostingAutoPublish);
+    setHostingBillingEmail(hostingData.settings.hostingBillingEmail ?? "");
+    setHostingPaymentLinkUrl(hostingData.settings.hostingPaymentLinkUrl ?? "");
+    setHostingBillingStatus((hostingData.settings.hostingBillingStatus as typeof hostingBillingStatus) || "not_sent");
+    setHostingSettingsInitialized(true);
+  }, [hostingData?.settings, hostingSettingsInitialized, hostingSettingsDirty]);
+
+  useEffect(() => {
+    if (!hostingData?.domains?.length) return;
+    setDomainRedirectTargets((prev) => {
+      const next = { ...prev };
+      for (const domain of hostingData.domains) {
+        const currentValue = prev[domain.id];
+        if (currentValue === undefined || currentValue === domain.redirectTargetOrigin || currentValue === site?.url) {
+          next[domain.id] = domain.redirectTargetOrigin || site?.url || "";
+        }
+      }
+      return next;
+    });
+  }, [hostingData?.domains, site?.url]);
 
   const configurationMutation = useMutation({
     mutationFn: (payload: {
@@ -107,6 +145,77 @@ function SiteDetailPage() {
       queryClient.invalidateQueries({ queryKey: ["sites", siteId] });
     },
   });
+
+  const publishMutation = useMutation({
+    mutationFn: (crawlId?: string) => hostingApi.publish(siteId, { crawlId, activate: true }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["hosting", siteId] });
+    },
+  });
+
+  const addDomainMutation = useMutation({
+    mutationFn: (nextHostname: string) => hostingApi.addDomain(siteId, nextHostname),
+    onSuccess: () => {
+      setHostname("");
+      queryClient.invalidateQueries({ queryKey: ["hosting", siteId] });
+    },
+  });
+
+  const syncDomainMutation = useMutation({
+    mutationFn: (domainId: string) => hostingApi.syncDomain(siteId, domainId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["hosting", siteId] });
+    },
+  });
+
+  const deleteDomainMutation = useMutation({
+    mutationFn: (domainId: string) => hostingApi.deleteDomain(siteId, domainId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["hosting", siteId] });
+    },
+  });
+
+  const updateDomainMutation = useMutation({
+    mutationFn: (payload: { domainId: string; redirectEnabled?: boolean; redirectTargetOrigin?: string | null }) =>
+      hostingApi.updateDomain(siteId, payload.domainId, {
+        redirectEnabled: payload.redirectEnabled,
+        redirectTargetOrigin: payload.redirectTargetOrigin,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["hosting", siteId] });
+    },
+  });
+
+  const hostingSettingsMutation = useMutation({
+    mutationFn: (payload: {
+      hostingAutoPublish?: boolean;
+      hostingBillingEmail?: string | null;
+      hostingPaymentLinkUrl?: string | null;
+      hostingBillingStatus?: "not_sent" | "sent" | "paid" | "past_due" | "cancelled";
+    }) => hostingApi.updateSettings(siteId, payload),
+    onSuccess: () => {
+      setHostingSettingsDirty(false);
+      queryClient.invalidateQueries({ queryKey: ["hosting", siteId] });
+      queryClient.invalidateQueries({ queryKey: ["sites", siteId] });
+    },
+  });
+
+  const activatePublicationMutation = useMutation({
+    mutationFn: (publicationId: string) => hostingApi.activatePublication(siteId, publicationId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["hosting", siteId] });
+      queryClient.invalidateQueries({ queryKey: ["sites", siteId] });
+    },
+  });
+
+  const paymentMailto = (() => {
+    if (!hostingBillingEmail.trim() || !hostingPaymentLinkUrl.trim()) return null;
+    const subject = encodeURIComponent(`Monthly hosted backup for ${site?.name ?? "your site"}`);
+    const body = encodeURIComponent(
+      `Hi,\n\nYour hosted backup is ready. You can start the monthly hosted backup subscription here:\n\n${hostingPaymentLinkUrl.trim()}\n\nOnce paid, your backup will remain hosted at the configured client subdomain.\n`
+    );
+    return `mailto:${hostingBillingEmail.trim()}?subject=${subject}&body=${body}`;
+  })();
 
   if (isLoading) {
     return (
@@ -494,6 +603,268 @@ function SiteDetailPage() {
               </button>
             </div>
           </div>
+
+          <div className="card-dark p-6">
+            <div className="flex items-center gap-2 mb-4">
+              <Globe2 size={16} style={{ color: "#6366f1" }} />
+              <h2 className="text-sm font-semibold" style={{ color: "#fafafa" }}>Client Domain Hosting</h2>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium mb-1" style={{ color: "#71717a" }}>
+                  Client subdomain
+                </label>
+                <input
+                  type="text"
+                  value={hostname}
+                  onChange={(e) => setHostname(e.target.value)}
+                  className="input-dark font-mono text-sm"
+                  placeholder="backup.client.com"
+                />
+                <p className="text-xs mt-1" style={{ color: "#52525b" }}>
+                  Client will add a CNAME from this hostname to your hosting target.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => addDomainMutation.mutate(hostname.trim())}
+                disabled={addDomainMutation.isPending || hostname.trim().length === 0}
+                className="btn-secondary btn-sm disabled:opacity-50"
+              >
+                <Globe2 size={14} />
+                {addDomainMutation.isPending ? "Adding..." : "Add Domain"}
+              </button>
+
+              {hostingData?.cnameTarget && (
+                <div className="rounded-lg p-3" style={{ backgroundColor: "#09090b", border: "1px solid #27272a" }}>
+                  <p className="text-xs font-semibold mb-2" style={{ color: "#a1a1aa" }}>Required DNS</p>
+                  <div className="text-xs font-mono space-y-1" style={{ color: "#71717a" }}>
+                    <div>Type: CNAME</div>
+                    <div>Target: {hostingData.cnameTarget}</div>
+                  </div>
+                </div>
+              )}
+
+              {hostingData?.publications.length ? (
+                <div className="rounded-lg p-3" style={{ backgroundColor: "#09090b", border: "1px solid #27272a" }}>
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <p className="text-xs font-semibold" style={{ color: "#a1a1aa" }}>Published Versions</p>
+                    <label className="flex items-center gap-1.5 text-xs" style={{ color: "#71717a" }}>
+                      <input
+                        type="checkbox"
+                        checked={hostingAutoPublish}
+                        onChange={(e) => {
+                          setHostingAutoPublish(e.target.checked);
+                          setHostingSettingsDirty(true);
+                          hostingSettingsMutation.mutate({ hostingAutoPublish: e.target.checked });
+                        }}
+                        style={{ accentColor: "#6366f1" }}
+                      />
+                      Auto latest
+                    </label>
+                  </div>
+                  <div className="space-y-1.5">
+                    {hostingData.publications.slice(0, 8).map((publication) => {
+                      const isActive = hostingData.domains.some((domain) => domain.activePublicationId === publication.id);
+                      return (
+                      <div key={publication.id} className="flex items-center justify-between gap-2 text-xs font-mono">
+                        <div className="min-w-0">
+                          <span style={{ color: "#71717a" }}>{publication.crawlId.slice(0, 8)}</span>
+                          {isActive && <span className="ml-2" style={{ color: "#4ade80" }}>live</span>}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span style={{ color: publication.status === "published" ? "#4ade80" : publication.status === "failed" ? "#f87171" : "#fbbf24" }}>
+                            {publication.status}
+                          </span>
+                          {publication.status === "published" && !isActive && (
+                            <button
+                              type="button"
+                              className="btn-ghost btn-sm"
+                              disabled={activatePublicationMutation.isPending}
+                              onClick={() => activatePublicationMutation.mutate(publication.id)}
+                            >
+                              Rollback
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      );
+                    })}
+                  </div>
+                  {!hostingAutoPublish && (
+                    <p className="text-xs mt-2" style={{ color: "#fbbf24" }}>
+                      Auto latest is off. Hosted domains stay pinned until you re-enable it.
+                    </p>
+                  )}
+                </div>
+              ) : null}
+
+              {hostingData?.domains.map((domain) => (
+                <div key={domain.id} className="rounded-lg p-3 space-y-3" style={{ backgroundColor: "#09090b", border: "1px solid #27272a" }}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <a
+                        href={`https://${domain.hostname}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm font-mono hover:opacity-80 truncate block"
+                        style={{ color: "#fafafa" }}
+                      >
+                        {domain.hostname}
+                      </a>
+                      <p className="text-xs font-mono mt-1" style={{ color: "#71717a" }}>
+                        {domain.status} {domain.sslStatus ? `/ ssl: ${domain.sslStatus}` : ""}
+                      </p>
+                      <p className="text-xs font-mono mt-1" style={{ color: domain.redirectEnabled ? "#fbbf24" : "#4ade80" }}>
+                        mode: {domain.redirectEnabled ? "301 redirect to main site" : "serve backup"}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => syncDomainMutation.mutate(domain.id)}
+                      disabled={syncDomainMutation.isPending}
+                      className="btn-secondary btn-sm disabled:opacity-50"
+                    >
+                      <RefreshCw size={14} />
+                      Sync
+                    </button>
+                  </div>
+
+                  {domain.ownershipVerificationName && domain.ownershipVerificationValue && (
+                    <div className="text-xs font-mono space-y-1" style={{ color: "#71717a" }}>
+                      <div>TXT name: {domain.ownershipVerificationName}</div>
+                      <div className="break-all">TXT value: {domain.ownershipVerificationValue}</div>
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 text-xs" style={{ color: "#a1a1aa" }}>
+                      <input
+                        type="checkbox"
+                        checked={domain.redirectEnabled ?? false}
+                        onChange={(e) =>
+                          updateDomainMutation.mutate({
+                            domainId: domain.id,
+                            redirectEnabled: e.target.checked,
+                            redirectTargetOrigin: domain.redirectTargetOrigin || site.url,
+                          })
+                        }
+                        style={{ accentColor: "#6366f1" }}
+                      />
+                      Redirect all backup traffic to main site with 301
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="url"
+                        value={domainRedirectTargets[domain.id] ?? (domain.redirectTargetOrigin || site.url)}
+                        className="input-dark font-mono text-xs"
+                        placeholder="https://client.com"
+                        onChange={(e) => {
+                          const nextValue = e.target.value;
+                          setDomainRedirectTargets((prev) => ({ ...prev, [domain.id]: nextValue }));
+                        }}
+                        onBlur={() => {
+                          const nextValue = (domainRedirectTargets[domain.id] ?? "").trim();
+                          if (nextValue && nextValue !== (domain.redirectTargetOrigin || site.url)) {
+                            updateDomainMutation.mutate({ domainId: domain.id, redirectTargetOrigin: nextValue });
+                          }
+                        }}
+                      />
+                    </div>
+                    <p className="text-xs" style={{ color: "#52525b" }}>
+                      Redirect preserves the path and query, for example /about?x=1 redirects to the same slug on this origin.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (confirm(`Remove hosting domain ${domain.hostname}?`)) {
+                        deleteDomainMutation.mutate(domain.id);
+                      }
+                    }}
+                    className="btn-ghost btn-sm"
+                  >
+                    Remove Domain
+                  </button>
+                </div>
+              ))}
+
+              <div className="rounded-lg p-3 space-y-3" style={{ backgroundColor: "#09090b", border: "1px solid #27272a" }}>
+                <div className="flex items-center gap-2">
+                  <CreditCard size={14} style={{ color: "#6366f1" }} />
+                  <p className="text-xs font-semibold" style={{ color: "#a1a1aa" }}>Monthly Billing Link</p>
+                </div>
+                <input
+                  type="email"
+                  value={hostingBillingEmail}
+                  onChange={(e) => {
+                    setHostingSettingsDirty(true);
+                    setHostingBillingEmail(e.target.value);
+                  }}
+                  className="input-dark font-mono text-sm"
+                  placeholder="owner@client.com"
+                />
+                <input
+                  type="url"
+                  value={hostingPaymentLinkUrl}
+                  onChange={(e) => {
+                    setHostingSettingsDirty(true);
+                    setHostingPaymentLinkUrl(e.target.value);
+                  }}
+                  className="input-dark font-mono text-sm"
+                  placeholder="https://buy.stripe.com/..."
+                />
+                <select
+                  value={hostingBillingStatus}
+                  onChange={(e) => {
+                    setHostingSettingsDirty(true);
+                    setHostingBillingStatus(e.target.value as typeof hostingBillingStatus);
+                  }}
+                  className="input-dark font-mono text-sm"
+                >
+                  <option value="not_sent">not_sent</option>
+                  <option value="sent">sent</option>
+                  <option value="paid">paid</option>
+                  <option value="past_due">past_due</option>
+                  <option value="cancelled">cancelled</option>
+                </select>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="btn-secondary btn-sm disabled:opacity-50"
+                    disabled={hostingSettingsMutation.isPending}
+                    onClick={() =>
+                      hostingSettingsMutation.mutate({
+                        hostingBillingEmail: hostingBillingEmail.trim() || null,
+                        hostingPaymentLinkUrl: hostingPaymentLinkUrl.trim() || null,
+                        hostingBillingStatus,
+                      })
+                    }
+                  >
+                    <Save size={14} />
+                    Save Billing
+                  </button>
+                  {paymentMailto && (
+                    <a
+                      href={paymentMailto}
+                      className="btn-secondary btn-sm"
+                      onClick={() => {
+                        hostingSettingsMutation.mutate({ hostingBillingStatus: "sent" });
+                      }}
+                    >
+                      Send Link
+                    </a>
+                  )}
+                </div>
+                <p className="text-xs" style={{ color: "#52525b" }}>
+                  Use a Stripe monthly Payment Link for now. This can later become Stripe Checkout plus webhooks when payment state needs to be automatic.
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* Crawl History */}
@@ -550,6 +921,19 @@ function SiteDetailPage() {
                           <Download size={14} />
                           Download
                         </a>
+                        <button
+                          type="button"
+                          className="btn-secondary btn-sm disabled:opacity-50"
+                          disabled={publishMutation.isPending}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            publishMutation.mutate(crawl.id);
+                          }}
+                        >
+                          <UploadCloud size={14} />
+                          {publishMutation.isPending ? "Publishing..." : "Publish"}
+                        </button>
                       </div>
                     )}
                   </Link>

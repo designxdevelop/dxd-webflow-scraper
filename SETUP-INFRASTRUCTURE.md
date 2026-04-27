@@ -14,7 +14,7 @@ All code changes are complete. This document covers the manual infrastructure pr
                  |  Upstash Redis HTTP   |
                  +----------+------------+
                             |
-              HTTP enqueue  |  SSE polling
+               HTTP enqueue  |  SSE polling
                             v
                  +-----------------------+
                  |  Railway (Worker)     |
@@ -25,10 +25,17 @@ All code changes are complete. This document covers the manual infrastructure pr
                             |
               ioredis TCP   |  S3-compat API
                             v
-         +-------------+  +----------------+
-         | Upstash     |  | Cloudflare R2  |
-         | Redis       |  | (storage)      |
-         +-------------+  +----------------+
+          +-------------+  +----------------+
+          | Upstash     |  | Cloudflare R2  |
+          | Redis       |  | (storage)      |
+          +-------------+  +----------------+
+                            ^
+                            |
+                 +----------+------------+
+                 | Cloudflare Worker     |
+                 | Backup Hosting        |
+                 | client CNAME domains  |
+                 +-----------------------+
                             |
               Hyperdrive    |
                             v
@@ -213,6 +220,9 @@ Go to your domain's Workers Routes and add:
 - [ ] Test: Create a crawl, verify it runs and SSE events arrive
 - [ ] Test: Preview an archived site
 - [ ] Test: Download a zip archive
+- [ ] Test: Publish a completed crawl and verify `published/<site>/<crawl>/index.html` exists in R2
+- [ ] Test: Add a client-owned CNAME hostname and wait for Cloudflare SSL status to become active
+- [ ] Test: Visit the client hostname and verify the hosted backup loads from R2
 - [ ] Keep old Railway API running for 48-72h as hot standby
 - [ ] Tear down old Railway API after stabilization
 
@@ -235,6 +245,7 @@ Set via `wrangler.toml` [vars]:
 - `NODE_ENV` — `production`
 - `FRONTEND_URL` — Frontend app URL
 - `CORS_ALLOWED_ORIGINS` — Comma-separated extra origins
+- `HOSTING_CNAME_TARGET` — hostname clients CNAME to for backup hosting
 
 Set via `wrangler secret put`:
 - `AUTH_SECRET` — Auth.js secret
@@ -245,10 +256,19 @@ Set via `wrangler secret put`:
 - `UPSTASH_REDIS_REST_TOKEN` — Upstash HTTP token
 - `WORKER_SERVICE_URL` — Railway worker HTTP URL
 - `WORKER_API_SECRET` — Shared auth secret for worker HTTP API
+- `CLOUDFLARE_ZONE_ID` — zone configured for Cloudflare for SaaS custom hostnames
+- `CLOUDFLARE_API_TOKEN` — token with permission to manage custom hostnames
 
 Bindings (in wrangler.toml):
 - `STORAGE_BUCKET` — R2 bucket binding
 - `HYPERDRIVE` — Hyperdrive binding to Railway Postgres
+
+### Backup Hosting Worker (Cloudflare)
+
+- Deploy `apps/hosting-worker` with the same `STORAGE_BUCKET` and `HYPERDRIVE` bindings.
+- Configure Cloudflare for SaaS/custom hostnames on the zone that owns your fallback hostname.
+- Set the API/Railway `HOSTING_CNAME_TARGET` to that fallback hostname. Clients create `CNAME backup.client.com -> HOSTING_CNAME_TARGET`.
+- The hosting Worker only serves domains present in `site_domains` with `status = active` and an active published backup.
 
 ### Worker Service (Railway)
 
@@ -256,6 +276,9 @@ Bindings (in wrangler.toml):
 - `REDIS_URL` — Upstash Redis TCP URL (was local/Railway Redis)
 - `WORKER_HTTP_PORT` — Port for HTTP API server (default: 3002)
 - `WORKER_API_SECRET` — Shared auth secret
+- `HOSTING_CNAME_TARGET` — same client CNAME target shown in the dashboard
+- `CLOUDFLARE_ZONE_ID` — optional; enables automated custom hostname provisioning
+- `CLOUDFLARE_API_TOKEN` — optional; enables automated custom hostname provisioning
 - `S3_ENDPOINT` — R2 S3-compatible endpoint (was AWS S3)
 - `S3_ACCESS_KEY_ID` — R2 API token access key
 - `S3_SECRET_ACCESS_KEY` — R2 API token secret key

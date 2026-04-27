@@ -22,6 +22,27 @@
       "when": 1738968780000,
       "tag": "0002_add_upload_progress",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1777334400000,
+      "tag": "0003_add_static_hosting",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1777338000000,
+      "tag": "0004_add_hosting_controls_and_billing",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1777341600000,
+      "tag": "0005_add_hosting_redirect_mode",
+      "breakpoints": true
     }
   ]
 }

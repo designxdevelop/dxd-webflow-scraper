@@ -34,6 +34,10 @@ const createSiteSchema = z.object({
   scheduleCron: z.string().optional().nullable(),
   storageType: z.enum(["local", "s3"]).optional(),
   storagePath: z.string().optional().nullable(),
+  hostingAutoPublish: z.boolean().optional(),
+  hostingBillingEmail: z.string().email().optional().nullable(),
+  hostingPaymentLinkUrl: z.string().url().optional().nullable(),
+  hostingBillingStatus: z.enum(["not_sent", "sent", "paid", "past_due", "cancelled"]).optional(),
 });
 
 const updateSiteSchema = createSiteSchema.partial();

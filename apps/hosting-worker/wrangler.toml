@@ -1,0 +1,18 @@
+name = "dxd-backup-hosting"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+[[r2_buckets]]
+binding = "STORAGE_BUCKET"
+bucket_name = "dxd-site-scraper"
+
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "REPLACE_WITH_HYPERDRIVE_CONFIG_ID"
+
+[vars]
+NODE_ENV = "production"
+
+# Configure a Cloudflare for SaaS fallback origin/custom hostname target in Cloudflare,
+# then set HOSTING_CNAME_TARGET to that hostname in the API/Railway service.

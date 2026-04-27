@@ -14,6 +14,14 @@ const crawlQueue = new Queue("crawl-jobs", {
     attempts: 1,
   },
 });
+const publicationQueue = new Queue("publication-jobs", {
+  connection: redis,
+  defaultJobOptions: {
+    removeOnComplete: 100,
+    removeOnFail: 100,
+    attempts: 1,
+  },
+});
 
 const app = new Hono();
 
@@ -43,6 +51,34 @@ app.post("/enqueue", async (c) => {
   await crawlQueue.add("crawl", { siteId: body.siteId, crawlId: body.crawlId }, { jobId: body.crawlId });
 
   return c.json({ ok: true, jobId: body.crawlId });
+});
+
+app.post("/publish", async (c) => {
+  const body = await c.req.json<{
+    siteId: string;
+    crawlId: string;
+    publicationId: string;
+    activate?: boolean;
+    autoPublish?: boolean;
+  }>();
+
+  if (!body.siteId || !body.crawlId || !body.publicationId) {
+    return c.json({ error: "siteId, crawlId, and publicationId are required" }, 400);
+  }
+
+  await publicationQueue.add(
+    "publish",
+    {
+      siteId: body.siteId,
+      crawlId: body.crawlId,
+      publicationId: body.publicationId,
+      activate: body.activate ?? true,
+      autoPublish: body.autoPublish ?? false,
+    },
+    { jobId: body.publicationId }
+  );
+
+  return c.json({ ok: true, jobId: body.publicationId });
 });
 
 // Cancel a crawl job (remove from queue if pending)

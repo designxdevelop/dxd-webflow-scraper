@@ -37,7 +37,7 @@ const createSiteSchema = z.object({
   hostingAutoPublish: z.boolean().optional(),
   hostingBillingEmail: z.string().email().optional().nullable(),
   hostingPaymentLinkUrl: z.string().url().optional().nullable(),
-  hostingBillingStatus: z.enum(["not_sent", "sent", "paid", "past_due", "cancelled"]).optional(),
+  hostingBillingStatus: z.enum(["not_sent", "sent", "paid", "past_due", "cancelled", "internal"]).optional(),
 });
 
 const updateSiteSchema = createSiteSchema.partial();

@@ -1,7 +1,7 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { sitesApi, crawlsApi, hostingApi } from "@/lib/api";
+import { sitesApi, crawlsApi, hostingApi, type HostingBillingStatus } from "@/lib/api";
 import { formatToMountainTime } from "@/lib/date";
 import { parseCron, toCronExpression, type ScheduleFrequency, WEEKDAYS } from "@/lib/schedule";
 import { ArrowLeft, Play, ExternalLink, Trash2, Download, Save, Globe2, UploadCloud, RefreshCw, CreditCard } from "lucide-react";
@@ -44,7 +44,7 @@ function SiteDetailPage() {
   const [hostingAutoPublish, setHostingAutoPublish] = useState(true);
   const [hostingBillingEmail, setHostingBillingEmail] = useState("");
   const [hostingPaymentLinkUrl, setHostingPaymentLinkUrl] = useState("");
-  const [hostingBillingStatus, setHostingBillingStatus] = useState<"not_sent" | "sent" | "paid" | "past_due" | "cancelled">("not_sent");
+  const [hostingBillingStatus, setHostingBillingStatus] = useState<HostingBillingStatus>("not_sent");
   const [hostingSettingsInitialized, setHostingSettingsInitialized] = useState(false);
   const [hostingSettingsDirty, setHostingSettingsDirty] = useState(false);
   const [domainRedirectTargets, setDomainRedirectTargets] = useState<Record<string, string>>({});
@@ -191,7 +191,7 @@ function SiteDetailPage() {
       hostingAutoPublish?: boolean;
       hostingBillingEmail?: string | null;
       hostingPaymentLinkUrl?: string | null;
-      hostingBillingStatus?: "not_sent" | "sent" | "paid" | "past_due" | "cancelled";
+      hostingBillingStatus?: HostingBillingStatus;
     }) => hostingApi.updateSettings(siteId, payload),
     onSuccess: () => {
       setHostingSettingsDirty(false);
@@ -797,31 +797,11 @@ function SiteDetailPage() {
                   <CreditCard size={14} style={{ color: "#6366f1" }} />
                   <p className="text-xs font-semibold" style={{ color: "#a1a1aa" }}>Monthly Billing Link</p>
                 </div>
-                <input
-                  type="email"
-                  value={hostingBillingEmail}
-                  onChange={(e) => {
-                    setHostingSettingsDirty(true);
-                    setHostingBillingEmail(e.target.value);
-                  }}
-                  className="input-dark font-mono text-sm"
-                  placeholder="owner@client.com"
-                />
-                <input
-                  type="url"
-                  value={hostingPaymentLinkUrl}
-                  onChange={(e) => {
-                    setHostingSettingsDirty(true);
-                    setHostingPaymentLinkUrl(e.target.value);
-                  }}
-                  className="input-dark font-mono text-sm"
-                  placeholder="https://buy.stripe.com/..."
-                />
                 <select
                   value={hostingBillingStatus}
                   onChange={(e) => {
                     setHostingSettingsDirty(true);
-                    setHostingBillingStatus(e.target.value as typeof hostingBillingStatus);
+                    setHostingBillingStatus(e.target.value as HostingBillingStatus);
                   }}
                   className="input-dark font-mono text-sm"
                 >
@@ -830,7 +810,32 @@ function SiteDetailPage() {
                   <option value="paid">paid</option>
                   <option value="past_due">past_due</option>
                   <option value="cancelled">cancelled</option>
+                  <option value="internal">internal</option>
                 </select>
+                {hostingBillingStatus !== "internal" && (
+                  <>
+                    <input
+                      type="email"
+                      value={hostingBillingEmail}
+                      onChange={(e) => {
+                        setHostingSettingsDirty(true);
+                        setHostingBillingEmail(e.target.value);
+                      }}
+                      className="input-dark font-mono text-sm"
+                      placeholder="owner@client.com"
+                    />
+                    <input
+                      type="url"
+                      value={hostingPaymentLinkUrl}
+                      onChange={(e) => {
+                        setHostingSettingsDirty(true);
+                        setHostingPaymentLinkUrl(e.target.value);
+                      }}
+                      className="input-dark font-mono text-sm"
+                      placeholder="https://buy.stripe.com/..."
+                    />
+                  </>
+                )}
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
@@ -838,8 +843,8 @@ function SiteDetailPage() {
                     disabled={hostingSettingsMutation.isPending}
                     onClick={() =>
                       hostingSettingsMutation.mutate({
-                        hostingBillingEmail: hostingBillingEmail.trim() || null,
-                        hostingPaymentLinkUrl: hostingPaymentLinkUrl.trim() || null,
+                        hostingBillingEmail: hostingBillingStatus === "internal" ? null : hostingBillingEmail.trim() || null,
+                        hostingPaymentLinkUrl: hostingBillingStatus === "internal" ? null : hostingPaymentLinkUrl.trim() || null,
                         hostingBillingStatus,
                       })
                     }
@@ -860,7 +865,7 @@ function SiteDetailPage() {
                   )}
                 </div>
                 <p className="text-xs" style={{ color: "#52525b" }}>
-                  Use a Stripe monthly Payment Link for now. This can later become Stripe Checkout plus webhooks when payment state needs to be automatic.
+                  Set status to internal for DXD-owned backups that should stay hosted without payment details.
                 </p>
               </div>
             </div>

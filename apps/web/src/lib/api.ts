@@ -14,6 +14,8 @@ export class ApiError extends Error {
   }
 }
 
+export type HostingBillingStatus = "not_sent" | "sent" | "paid" | "past_due" | "cancelled" | "internal";
+
 // Helper to make authenticated requests
 async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
   return fetch(url, {
@@ -148,7 +150,7 @@ export interface CreateSiteInput {
   hostingAutoPublish?: boolean;
   hostingBillingEmail?: string | null;
   hostingPaymentLinkUrl?: string | null;
-  hostingBillingStatus?: "not_sent" | "sent" | "paid" | "past_due" | "cancelled";
+  hostingBillingStatus?: HostingBillingStatus;
 }
 
 export interface UpdateSiteInput extends Partial<CreateSiteInput> {}
@@ -232,7 +234,7 @@ export const hostingApi = {
       hostingAutoPublish?: boolean;
       hostingBillingEmail?: string | null;
       hostingPaymentLinkUrl?: string | null;
-      hostingBillingStatus?: "not_sent" | "sent" | "paid" | "past_due" | "cancelled";
+      hostingBillingStatus?: HostingBillingStatus;
     }
   ): Promise<{
     settings: {

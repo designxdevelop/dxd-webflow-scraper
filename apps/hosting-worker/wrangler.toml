@@ -9,7 +9,7 @@ bucket_name = "dxd-site-scraper"
 
 [[hyperdrive]]
 binding = "HYPERDRIVE"
-id = "REPLACE_WITH_HYPERDRIVE_CONFIG_ID"
+id = "c0bd95a95ffc438aa3ebb25f8766b6a5"
 
 [vars]
 NODE_ENV = "production"

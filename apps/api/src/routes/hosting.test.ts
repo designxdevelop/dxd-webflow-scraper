@@ -147,4 +147,54 @@ describe("hosting routes", () => {
     assert.equal(payload.alreadyExists, true);
     assert.deepEqual(payload.domain, existingDomain);
   });
+
+  it("removes the local domain when Cloudflare custom hostname is already gone", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ success: false, errors: [{ message: "custom hostname not found" }] }), {
+        status: 404,
+        headers: { "content-type": "application/json" },
+      });
+
+    try {
+      let deleted = false;
+      const app = new Hono();
+      const db = {
+        query: {
+          siteDomains: {
+            findFirst: async () => ({
+              id: "domain-1",
+              siteId: "site-1",
+              hostname: "backup.example.com",
+              cloudflareHostnameId: "cf-hostname-1",
+            }),
+          },
+        },
+        delete: () => ({
+          where: async () => {
+            deleted = true;
+          },
+        }),
+      };
+
+      app.use("*", async (c, next) => {
+        c.set("db", db);
+        await next();
+      });
+      app.route("/api/sites", hostingRoutes);
+
+      const response = await app.request(
+        "/api/sites/site-1/domains/domain-1",
+        { method: "DELETE" },
+        { CLOUDFLARE_ZONE_ID: "zone-1", CLOUDFLARE_API_TOKEN: "token-1" }
+      );
+      const payload = await response.json();
+
+      assert.equal(response.status, 200);
+      assert.equal(payload.success, true);
+      assert.equal(deleted, true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });

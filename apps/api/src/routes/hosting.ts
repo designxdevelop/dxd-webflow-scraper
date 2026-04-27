@@ -116,7 +116,9 @@ async function deleteCloudflareCustomHostname(
 
   const payload = (await response.json().catch(() => null)) as any;
   if (!response.ok || payload?.success === false) {
+    if (response.status === 404) return true;
     const message = payload?.errors?.[0]?.message || `Cloudflare custom hostname delete failed with ${response.status}`;
+    if (/not found|does not exist|could not be found/i.test(message)) return true;
     throw new Error(message);
   }
 

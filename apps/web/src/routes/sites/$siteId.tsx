@@ -1,7 +1,7 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { sitesApi, crawlsApi, hostingApi, type HostingBillingStatus } from "@/lib/api";
+import { sitesApi, crawlsApi, hostingApi, type DomainDnsCheck, type HostingBillingStatus } from "@/lib/api";
 import { formatToMountainTime } from "@/lib/date";
 import { parseCron, toCronExpression, type ScheduleFrequency, WEEKDAYS } from "@/lib/schedule";
 import { ArrowLeft, Play, ExternalLink, Trash2, Download, Save, Globe2, UploadCloud, RefreshCw, CreditCard } from "lucide-react";
@@ -48,6 +48,7 @@ function SiteDetailPage() {
   const [hostingSettingsInitialized, setHostingSettingsInitialized] = useState(false);
   const [hostingSettingsDirty, setHostingSettingsDirty] = useState(false);
   const [domainRedirectTargets, setDomainRedirectTargets] = useState<Record<string, string>>({});
+  const [domainDnsChecks, setDomainDnsChecks] = useState<Record<string, DomainDnsCheck>>({});
 
   const site = data?.site;
 
@@ -165,6 +166,13 @@ function SiteDetailPage() {
     mutationFn: (domainId: string) => hostingApi.syncDomain(siteId, domainId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["hosting", siteId] });
+    },
+  });
+
+  const checkDomainDnsMutation = useMutation({
+    mutationFn: (domainId: string) => hostingApi.checkDomainDns(siteId, domainId),
+    onSuccess: (data, domainId) => {
+      setDomainDnsChecks((prev) => ({ ...prev, [domainId]: data.dns }));
     },
   });
 
@@ -701,7 +709,12 @@ function SiteDetailPage() {
                 </div>
               ) : null}
 
-              {hostingData?.domains.map((domain) => (
+              {hostingData?.domains.map((domain) => {
+                const dnsCheck = domainDnsChecks[domain.id];
+                const ownershipTxtCheck = dnsCheck?.ownershipTxt;
+                const sslTxtCheck = dnsCheck?.sslTxt;
+
+                return (
                 <div key={domain.id} className="rounded-lg p-3 space-y-3" style={{ backgroundColor: "#09090b", border: "1px solid #27272a" }}>
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
@@ -721,23 +734,84 @@ function SiteDetailPage() {
                         mode: {domain.redirectEnabled ? "301 redirect to main site" : "serve backup"}
                       </p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => syncDomainMutation.mutate(domain.id)}
-                      disabled={syncDomainMutation.isPending}
-                      className="btn-secondary btn-sm disabled:opacity-50"
-                    >
-                      <RefreshCw size={14} />
-                      Sync
-                    </button>
+                    <div className="flex flex-wrap gap-2 justify-end">
+                      <button
+                        type="button"
+                        onClick={() => syncDomainMutation.mutate(domain.id)}
+                        disabled={syncDomainMutation.isPending}
+                        className="btn-secondary btn-sm disabled:opacity-50"
+                      >
+                        <RefreshCw size={14} />
+                        Sync Cloudflare
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => checkDomainDnsMutation.mutate(domain.id)}
+                        disabled={checkDomainDnsMutation.isPending}
+                        className="btn-secondary btn-sm disabled:opacity-50"
+                      >
+                        <RefreshCw size={14} />
+                        Check DNS
+                      </button>
+                    </div>
                   </div>
 
-                  {domain.ownershipVerificationName && domain.ownershipVerificationValue && (
-                    <div className="text-xs font-mono space-y-1" style={{ color: "#71717a" }}>
-                      <div>TXT name: {domain.ownershipVerificationName}</div>
-                      <div className="break-all">TXT value: {domain.ownershipVerificationValue}</div>
+                  <div className="rounded-md p-3 text-xs font-mono space-y-2" style={{ backgroundColor: "#050507", border: "1px solid #27272a", color: "#71717a" }}>
+                    <p className="font-semibold" style={{ color: "#a1a1aa" }}>Verification records</p>
+                    <div>
+                      <div>CNAME name: {domain.hostname}</div>
+                      <div className="break-all">CNAME value: {domain.cnameTarget}</div>
                     </div>
-                  )}
+                    {domain.ownershipVerificationName && domain.ownershipVerificationValue ? (
+                      <div>
+                        <div style={{ color: "#a1a1aa" }}>Cloudflare ownership TXT</div>
+                        <div className="break-all">TXT name: {domain.ownershipVerificationName}</div>
+                        <div className="break-all">TXT value: {domain.ownershipVerificationValue}</div>
+                      </div>
+                    ) : (
+                      <div>TXT verification: not returned by Cloudflare yet. Click Sync Cloudflare after provisioning.</div>
+                    )}
+                    {domain.sslValidationTxtName && domain.sslValidationTxtValue ? (
+                      <div>
+                        <div style={{ color: "#a1a1aa" }}>SSL ACME TXT</div>
+                        <div className="break-all">TXT name: {domain.sslValidationTxtName}</div>
+                        <div className="break-all">TXT value: {domain.sslValidationTxtValue}</div>
+                      </div>
+                    ) : (
+                      <div>SSL ACME TXT: not returned by Cloudflare yet. Click Sync Cloudflare after DNS is in place.</div>
+                    )}
+                    {dnsCheck && (
+                      <div className="space-y-1 pt-2" style={{ borderTop: "1px solid #27272a" }}>
+                        <div style={{ color: dnsCheck.cname.verified ? "#4ade80" : "#fbbf24" }}>
+                          CNAME check: {dnsCheck.cname.verified ? "verified" : "not visible yet"}
+                        </div>
+                        <div className="break-all">
+                          Found CNAME: {dnsCheck.cname.values.length ? dnsCheck.cname.values.join(", ") : "none"}
+                        </div>
+                        {ownershipTxtCheck && (
+                          <>
+                            <div style={{ color: ownershipTxtCheck.verified ? "#4ade80" : "#fbbf24" }}>
+                              Ownership TXT check: {ownershipTxtCheck.verified ? "verified" : "not visible yet"}
+                            </div>
+                            <div className="break-all">
+                              Found ownership TXT: {ownershipTxtCheck.values.length ? ownershipTxtCheck.values.join(", ") : "none"}
+                            </div>
+                          </>
+                        )}
+                        {sslTxtCheck && (
+                          <>
+                            <div style={{ color: sslTxtCheck.verified ? "#4ade80" : "#fbbf24" }}>
+                              SSL ACME TXT check: {sslTxtCheck.verified ? "verified" : "not visible yet"}
+                            </div>
+                            <div className="break-all">
+                              Found SSL ACME TXT: {sslTxtCheck.values.length ? sslTxtCheck.values.join(", ") : "none"}
+                            </div>
+                          </>
+                        )}
+                        <div>Checked: {formatToMountainTime(dnsCheck.checkedAt)}</div>
+                      </div>
+                    )}
+                  </div>
 
                   <div className="space-y-2">
                     <label className="flex items-center gap-2 text-xs" style={{ color: "#a1a1aa" }}>
@@ -790,7 +864,8 @@ function SiteDetailPage() {
                     Remove Domain
                   </button>
                 </div>
-              ))}
+                );
+              })}
 
               <div className="rounded-lg p-3 space-y-3" style={{ backgroundColor: "#09090b", border: "1px solid #27272a" }}>
                 <div className="flex items-center gap-2">

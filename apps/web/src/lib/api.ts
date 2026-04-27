@@ -128,11 +128,35 @@ export interface SiteDomain {
   cloudflareHostnameId: string | null;
   ownershipVerificationName: string | null;
   ownershipVerificationValue: string | null;
+  sslValidationTxtName: string | null;
+  sslValidationTxtValue: string | null;
   sslStatus: string | null;
   errorMessage: string | null;
   createdAt: string;
   updatedAt: string;
   activePublication?: SitePublication | null;
+}
+
+export interface DomainDnsCheck {
+  checkedAt: string;
+  cname: {
+    name: string;
+    expected: string;
+    values: string[];
+    verified: boolean;
+  };
+  ownershipTxt: {
+    name: string;
+    expected: string | null;
+    values: string[];
+    verified: boolean;
+  } | null;
+  sslTxt: {
+    name: string;
+    expected: string | null;
+    values: string[];
+    verified: boolean;
+  } | null;
 }
 
 export interface CreateSiteInput {
@@ -204,7 +228,7 @@ export const sitesApi = {
 
 export const hostingApi = {
   get: async (siteId: string): Promise<{
-    cnameTarget: string;
+    cnameTarget: string | null;
     settings: {
       hostingAutoPublish: boolean;
       hostingBillingEmail: string | null;
@@ -216,7 +240,7 @@ export const hostingApi = {
   }> => {
     const res = await fetchWithAuth(`${API_BASE}/sites/${siteId}/hosting`);
     return parseApiResponse<{
-      cnameTarget: string;
+      cnameTarget: string | null;
       settings: {
         hostingAutoPublish: boolean;
         hostingBillingEmail: string | null;
@@ -283,6 +307,11 @@ export const hostingApi = {
   syncDomain: async (siteId: string, domainId: string): Promise<{ domain: SiteDomain }> => {
     const res = await fetchWithAuth(`${API_BASE}/sites/${siteId}/domains/${domainId}/sync`, { method: "POST" });
     return parseApiResponse<{ domain: SiteDomain }>(res, "Failed to sync domain");
+  },
+
+  checkDomainDns: async (siteId: string, domainId: string): Promise<{ dns: DomainDnsCheck }> => {
+    const res = await fetchWithAuth(`${API_BASE}/sites/${siteId}/domains/${domainId}/check`, { method: "POST" });
+    return parseApiResponse<{ dns: DomainDnsCheck }>(res, "Failed to check domain DNS");
   },
 
   updateDomain: async (

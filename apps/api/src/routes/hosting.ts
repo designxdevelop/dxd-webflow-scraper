@@ -42,12 +42,18 @@ const updateHostingSettingsSchema = z.object({
   hostingBillingStatus: z.enum(["not_sent", "sent", "paid", "past_due", "cancelled", "internal"]).optional(),
 });
 
-function getHostingCnameTarget(c: { env?: { HOSTING_CNAME_TARGET?: string } }): string {
+function getOptionalHostingCnameTarget(c: { env?: { HOSTING_CNAME_TARGET?: string } }): string | null {
   const target = c.env?.HOSTING_CNAME_TARGET || process.env.HOSTING_CNAME_TARGET;
+  if (!target) return null;
+  return target.replace(/^https?:\/\//, "").replace(/\/+$/, "").toLowerCase();
+}
+
+function getHostingCnameTarget(c: { env?: { HOSTING_CNAME_TARGET?: string } }): string {
+  const target = getOptionalHostingCnameTarget(c);
   if (!target) {
     throw new Error("HOSTING_CNAME_TARGET is required to create hosted domains");
   }
-  return target.replace(/^https?:\/\//, "").replace(/\/+$/, "").toLowerCase();
+  return target;
 }
 
 function getCloudflareConfig(c: { env?: { CLOUDFLARE_ZONE_ID?: string; CLOUDFLARE_API_TOKEN?: string } }) {
@@ -145,15 +151,42 @@ async function syncCloudflareCustomHostname(
 function extractCloudflareDomainFields(result: any) {
   const ownership = result?.ownership_verification ?? result?.ownership_verification_http;
   const ssl = result?.ssl;
+  const sslTxtRecord = Array.isArray(ssl?.validation_records)
+    ? ssl.validation_records.find(
+        (record: any) => typeof record?.txt_name === "string" && typeof record?.txt_value === "string"
+      )
+    : null;
   const status = result?.status === "active" && ssl?.status === "active" ? "active" : "pending_dns";
 
   return {
     cloudflareHostnameId: typeof result?.id === "string" ? result.id : null,
     ownershipVerificationName: typeof ownership?.name === "string" ? ownership.name : null,
     ownershipVerificationValue: typeof ownership?.value === "string" ? ownership.value : null,
+    sslValidationTxtName: typeof sslTxtRecord?.txt_name === "string" ? sslTxtRecord.txt_name : null,
+    sslValidationTxtValue: typeof sslTxtRecord?.txt_value === "string" ? sslTxtRecord.txt_value : null,
     sslStatus: typeof ssl?.status === "string" ? ssl.status : null,
     status,
   };
+}
+
+function normalizeDnsValue(value: string): string {
+  return value.replace(/^"|"$/g, "").replace(/\.$/, "").toLowerCase();
+}
+
+async function queryDns(name: string, type: "CNAME" | "TXT") {
+  const url = new URL("https://cloudflare-dns.com/dns-query");
+  url.searchParams.set("name", name);
+  url.searchParams.set("type", type);
+
+  const response = await fetch(url, { headers: { accept: "application/dns-json" } });
+  if (!response.ok) {
+    throw new Error(`DNS lookup failed with ${response.status}`);
+  }
+
+  const payload = (await response.json().catch(() => null)) as { Answer?: { data?: string }[] } | null;
+  return (payload?.Answer ?? [])
+    .map((answer) => (typeof answer.data === "string" ? normalizeDnsValue(answer.data) : null))
+    .filter((value): value is string => Boolean(value));
 }
 
 function toOrigin(value: string | null | undefined): string | null {
@@ -196,7 +229,7 @@ app.get("/:siteId/hosting", async (c) => {
   ]);
 
   return c.json({
-    cnameTarget: getHostingCnameTarget(c),
+    cnameTarget: getOptionalHostingCnameTarget(c),
     settings: {
       hostingAutoPublish: site.hostingAutoPublish ?? true,
       hostingBillingEmail: site.hostingBillingEmail,
@@ -332,6 +365,8 @@ app.post("/:siteId/domains", zValidator("json", createDomainSchema), async (c) =
         cloudflareHostnameId: cloudflareFields.cloudflareHostnameId,
         ownershipVerificationName: cloudflareFields.ownershipVerificationName,
         ownershipVerificationValue: cloudflareFields.ownershipVerificationValue,
+        sslValidationTxtName: cloudflareFields.sslValidationTxtName,
+        sslValidationTxtValue: cloudflareFields.sslValidationTxtValue,
         sslStatus: cloudflareFields.sslStatus,
         errorMessage: null,
         updatedAt: new Date(),
@@ -426,6 +461,57 @@ app.post("/:siteId/domains/:domainId/sync", async (c) => {
     .returning();
 
   return c.json({ domain: updated });
+});
+
+app.post("/:siteId/domains/:domainId/check", async (c) => {
+  const db = c.get("db");
+  const siteId = c.req.param("siteId");
+  const domainId = c.req.param("domainId");
+
+  const domain = await db.query.siteDomains.findFirst({
+    where: and(eq(siteDomains.id, domainId), eq(siteDomains.siteId, siteId)),
+  });
+  if (!domain) return c.json({ error: "Domain not found" }, 404);
+
+  const [cnameValues, ownershipTxtValues, sslTxtValues] = await Promise.all([
+    queryDns(domain.hostname, "CNAME"),
+    domain.ownershipVerificationName ? queryDns(domain.ownershipVerificationName, "TXT") : Promise.resolve([]),
+    domain.sslValidationTxtName ? queryDns(domain.sslValidationTxtName, "TXT") : Promise.resolve([]),
+  ]);
+
+  const expectedCname = normalizeDnsValue(domain.cnameTarget);
+  const expectedOwnershipTxt = domain.ownershipVerificationValue
+    ? normalizeDnsValue(domain.ownershipVerificationValue)
+    : null;
+  const expectedSslTxt = domain.sslValidationTxtValue ? normalizeDnsValue(domain.sslValidationTxtValue) : null;
+
+  return c.json({
+    dns: {
+      checkedAt: new Date().toISOString(),
+      cname: {
+        name: domain.hostname,
+        expected: domain.cnameTarget,
+        values: cnameValues,
+        verified: cnameValues.includes(expectedCname),
+      },
+      ownershipTxt: domain.ownershipVerificationName
+        ? {
+            name: domain.ownershipVerificationName,
+            expected: domain.ownershipVerificationValue,
+            values: ownershipTxtValues,
+            verified: expectedOwnershipTxt ? ownershipTxtValues.includes(expectedOwnershipTxt) : false,
+          }
+        : null,
+      sslTxt: domain.sslValidationTxtName
+        ? {
+            name: domain.sslValidationTxtName,
+            expected: domain.sslValidationTxtValue,
+            values: sslTxtValues,
+            verified: expectedSslTxt ? sslTxtValues.includes(expectedSslTxt) : false,
+          }
+        : null,
+    },
+  });
 });
 
 app.post("/:siteId/domains/:domainId/activate", zValidator("json", activatePublicationSchema), async (c) => {

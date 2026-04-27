@@ -165,6 +165,8 @@ export const siteDomains = pgTable(
     cloudflareHostnameId: varchar("cloudflare_hostname_id", { length: 255 }),
     ownershipVerificationName: varchar("ownership_verification_name", { length: 255 }),
     ownershipVerificationValue: text("ownership_verification_value"),
+    sslValidationTxtName: varchar("ssl_validation_txt_name", { length: 255 }),
+    sslValidationTxtValue: text("ssl_validation_txt_value"),
     sslStatus: varchar("ssl_status", { length: 100 }),
     errorMessage: text("error_message"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),

@@ -178,5 +178,3 @@ function createStorage(config: StorageConfig): StorageAdapter {
 export type { StorageAdapter, StorageConfig } from "./adapter.js";
 export { LocalStorage } from "./local.js";
 export { S3Storage } from "./s3.js";
-// R2Storage is exported via "@dxd/storage/r2" sub-path only
-// to avoid pulling Cloudflare types into Node-only consumers.

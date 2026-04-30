@@ -42,32 +42,29 @@ const updateHostingSettingsSchema = z.object({
   hostingBillingStatus: z.enum(["not_sent", "sent", "paid", "past_due", "cancelled", "internal"]).optional(),
 });
 
-function getOptionalHostingCnameTarget(c: { env?: { HOSTING_CNAME_TARGET?: string } }): string | null {
-  const target = c.env?.HOSTING_CNAME_TARGET || process.env.HOSTING_CNAME_TARGET;
+function getOptionalHostingCnameTarget(): string | null {
+  const target = process.env.HOSTING_CNAME_TARGET;
   if (!target) return null;
   return target.replace(/^https?:\/\//, "").replace(/\/+$/, "").toLowerCase();
 }
 
-function getHostingCnameTarget(c: { env?: { HOSTING_CNAME_TARGET?: string } }): string {
-  const target = getOptionalHostingCnameTarget(c);
+function getHostingCnameTarget(): string {
+  const target = getOptionalHostingCnameTarget();
   if (!target) {
     throw new Error("HOSTING_CNAME_TARGET is required to create hosted domains");
   }
   return target;
 }
 
-function getCloudflareConfig(c: { env?: { CLOUDFLARE_ZONE_ID?: string; CLOUDFLARE_API_TOKEN?: string } }) {
-  const zoneId = c.env?.CLOUDFLARE_ZONE_ID || process.env.CLOUDFLARE_ZONE_ID;
-  const apiToken = c.env?.CLOUDFLARE_API_TOKEN || process.env.CLOUDFLARE_API_TOKEN;
+function getCloudflareConfig() {
+  const zoneId = process.env.CLOUDFLARE_ZONE_ID;
+  const apiToken = process.env.CLOUDFLARE_API_TOKEN;
   if (!zoneId || !apiToken) return null;
   return { zoneId, apiToken };
 }
 
-async function createCloudflareCustomHostname(
-  c: { env?: { CLOUDFLARE_ZONE_ID?: string; CLOUDFLARE_API_TOKEN?: string } },
-  hostname: string
-) {
-  const config = getCloudflareConfig(c);
+async function createCloudflareCustomHostname(hostname: string) {
+  const config = getCloudflareConfig();
   if (!config) return null;
 
   const response = await fetch(`https://api.cloudflare.com/client/v4/zones/${config.zoneId}/custom_hostnames`, {
@@ -97,11 +94,8 @@ async function createCloudflareCustomHostname(
   return payload?.result ?? null;
 }
 
-async function deleteCloudflareCustomHostname(
-  c: { env?: { CLOUDFLARE_ZONE_ID?: string; CLOUDFLARE_API_TOKEN?: string } },
-  cloudflareHostnameId: string
-) {
-  const config = getCloudflareConfig(c);
+async function deleteCloudflareCustomHostname(cloudflareHostnameId: string) {
+  const config = getCloudflareConfig();
   if (!config) return false;
 
   const response = await fetch(
@@ -125,11 +119,8 @@ async function deleteCloudflareCustomHostname(
   return true;
 }
 
-async function syncCloudflareCustomHostname(
-  c: { env?: { CLOUDFLARE_ZONE_ID?: string; CLOUDFLARE_API_TOKEN?: string } },
-  cloudflareHostnameId: string
-) {
-  const config = getCloudflareConfig(c);
+async function syncCloudflareCustomHostname(cloudflareHostnameId: string) {
+  const config = getCloudflareConfig();
   if (!config) return null;
 
   const response = await fetch(
@@ -234,7 +225,7 @@ app.get("/:siteId/hosting", async (c) => {
   ]);
 
   return c.json({
-    cnameTarget: getOptionalHostingCnameTarget(c),
+    cnameTarget: getOptionalHostingCnameTarget(),
     settings: {
       hostingAutoPublish: site.hostingAutoPublish ?? true,
       hostingBillingEmail: site.hostingBillingEmail,
@@ -315,7 +306,7 @@ app.post("/:siteId/domains", zValidator("json", createDomainSchema), async (c) =
   const db = c.get("db");
   const siteId = c.req.param("siteId");
   const { hostname } = c.req.valid("json");
-  const cnameTarget = getHostingCnameTarget(c);
+  const cnameTarget = getHostingCnameTarget();
 
   const site = await db.query.sites.findFirst({ where: eq(sites.id, siteId) });
   if (!site) return c.json({ error: "Site not found" }, 404);
@@ -323,7 +314,7 @@ app.post("/:siteId/domains", zValidator("json", createDomainSchema), async (c) =
     return c.json({ error: "Use a client-owned hostname, not the hosting target domain" }, 400);
   }
 
-  const cloudflareConfig = getCloudflareConfig(c);
+  const cloudflareConfig = getCloudflareConfig();
   if (!cloudflareConfig) {
     return c.json({ error: "Cloudflare custom hostname configuration is required to add client domains" }, 503);
   }
@@ -360,7 +351,7 @@ app.post("/:siteId/domains", zValidator("json", createDomainSchema), async (c) =
 
   let cloudflareHostnameId: string | null = null;
   try {
-    const result = await createCloudflareCustomHostname(c, hostname);
+    const result = await createCloudflareCustomHostname(hostname);
     if (!result) {
       throw new Error("Cloudflare custom hostname provisioning is not configured");
     }
@@ -391,7 +382,7 @@ app.post("/:siteId/domains", zValidator("json", createDomainSchema), async (c) =
   } catch (error) {
     if (cloudflareHostnameId) {
       try {
-        await deleteCloudflareCustomHostname(c, cloudflareHostnameId);
+        await deleteCloudflareCustomHostname(cloudflareHostnameId);
       } catch (cleanupError) {
         const cleanupMessage = cleanupError instanceof Error ? cleanupError.message : "Unknown cleanup error";
         await db
@@ -455,7 +446,7 @@ app.post("/:siteId/domains/:domainId/sync", async (c) => {
   if (!domain) return c.json({ error: "Domain not found" }, 404);
   if (!domain.cloudflareHostnameId) return c.json({ domain });
 
-  const result = await syncCloudflareCustomHostname(c, domain.cloudflareHostnameId);
+  const result = await syncCloudflareCustomHostname(domain.cloudflareHostnameId);
   if (!result) {
     return c.json(
       { error: "Cloudflare custom hostname sync is unavailable because Cloudflare configuration is missing" },
@@ -588,7 +579,7 @@ app.delete("/:siteId/domains/:domainId", async (c) => {
   if (!existing) return c.json({ error: "Domain not found" }, 404);
 
   if (existing.cloudflareHostnameId) {
-    const deleted = await deleteCloudflareCustomHostname(c, existing.cloudflareHostnameId);
+    const deleted = await deleteCloudflareCustomHostname(existing.cloudflareHostnameId);
     if (!deleted) {
       return c.json(
         {

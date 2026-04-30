@@ -4,8 +4,6 @@ import * as schema from "./schema.js";
 
 /**
  * Create a Drizzle database client from a connection string.
- * In Workers: connectionString comes from env.HYPERDRIVE.connectionString
- * In Node: connectionString comes from process.env.DATABASE_URL
  */
 export function createDbClient(connectionString: string) {
   const client = postgres(connectionString);

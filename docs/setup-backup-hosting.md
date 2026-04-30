@@ -109,7 +109,7 @@ binding = "HYPERDRIVE"
 id = "YOUR_HYPERDRIVE_CONFIG_ID"
 ```
 
-The API Worker config, if used, also needs the same Hyperdrive ID in `apps/api/wrangler.toml`.
+The API on Railway connects directly to Postgres; only the hosting Worker needs Hyperdrive.
 
 ## Deploy The Hosting Worker
 

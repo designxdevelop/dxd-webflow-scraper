@@ -6,7 +6,6 @@ import type { QueueClient, PubSubClient } from "../queue/client.js";
 
 /**
  * Dependencies injected into the Hono app.
- * Created differently for Node (singletons from process.env) vs Workers (from bindings).
  */
 export interface AppDeps {
   db: Database;

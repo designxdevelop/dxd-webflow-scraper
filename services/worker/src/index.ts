@@ -12,7 +12,7 @@ const worker = startWorker();
 // Start the scheduler
 startScheduler();
 
-// Start the HTTP API server (for receiving enqueue requests from Workers API)
+// Start the HTTP API server (for receiving enqueue requests from the API)
 const httpPort = parseInt(process.env.WORKER_HTTP_PORT || "3002");
 startHttpServer(httpPort);
 

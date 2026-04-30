@@ -5,9 +5,6 @@ import type { AppEnv } from "../env.js";
 const app = new Hono<AppEnv>();
 
 // SSE endpoint for live crawl logs.
-// Uses the PubSubClient abstraction:
-// - Node: ioredis pub/sub (persistent connection)
-// - Workers: polls Redis stream via Upstash HTTP
 app.get("/crawls/:id", async (c) => {
   const crawlId = c.req.param("id");
   const channel = `crawl:${crawlId}`;

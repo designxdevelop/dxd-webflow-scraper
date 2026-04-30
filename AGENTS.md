@@ -4,7 +4,7 @@ This repository is optimized for AI coding agents (Codex, Claude Code, Cursor, C
 
 ## Project Map
 
-- `apps/api`: Hono API service (Node runtime + Workers entrypoint)
+- `apps/api`: Hono API service (Node runtime)
 - `apps/web`: Vite + React + TanStack Router dashboard
 - `services/worker`: BullMQ worker for crawl execution and scheduling
 - `packages/scraper`: Shared crawling and rewrite engine

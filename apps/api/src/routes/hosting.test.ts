@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { Hono } from "hono";
+import type { AppEnv } from "../env.js";
 import { hostingRoutes } from "./hosting.js";
 
 describe("hosting routes", () => {
   it("returns billing settings even when hosting CNAME is not configured", async () => {
-    const app = new Hono();
+    const app = new Hono<AppEnv>();
     const db = {
       query: {
         sites: {
@@ -23,13 +24,13 @@ describe("hosting routes", () => {
     };
 
     app.use("*", async (c, next) => {
-      c.set("db", db);
+      c.set("db", db as any);
       await next();
     });
     app.route("/api/sites", hostingRoutes);
 
     const response = await app.request("/api/sites/site-1/hosting");
-    const payload = await response.json();
+    const payload = (await response.json()) as any;
 
     assert.equal(response.status, 200);
     assert.equal(payload.cnameTarget, null);
@@ -42,110 +43,118 @@ describe("hosting routes", () => {
   });
 
   it("returns the existing same-site domain when a re-add hits the hostname unique constraint", async () => {
-    const existingDomain = {
-      id: "domain-1",
-      siteId: "site-1",
-      hostname: "backup.example.com",
-      cnameTarget: "hosting.example.com",
-      status: "pending_dns",
-    };
-    const app = new Hono();
-    const db = {
-      query: {
-        sites: {
-          findFirst: async () => ({ id: "site-1", url: "https://example.com" }),
-        },
-        sitePublications: { findFirst: async () => null },
-        siteDomains: { findFirst: async () => existingDomain },
-      },
-      insert: () => ({
-        values: () => ({
-          returning: async () => {
-            throw { code: "23505" };
+    const originalEnv = { ...process.env };
+    process.env.HOSTING_CNAME_TARGET = "hosting.example.com";
+    process.env.CLOUDFLARE_ZONE_ID = "zone-1";
+    process.env.CLOUDFLARE_API_TOKEN = "token-1";
+
+    try {
+      const existingDomain = {
+        id: "domain-1",
+        siteId: "site-1",
+        hostname: "backup.example.com",
+        cnameTarget: "hosting.example.com",
+        status: "pending_dns",
+      };
+      const app = new Hono<AppEnv>();
+      const db = {
+        query: {
+          sites: {
+            findFirst: async () => ({ id: "site-1", url: "https://example.com" }),
           },
+          sitePublications: { findFirst: async () => null },
+          siteDomains: { findFirst: async () => existingDomain },
+        },
+        insert: () => ({
+          values: () => ({
+            returning: async () => {
+              throw { code: "23505" };
+            },
+          }),
         }),
-      }),
-    };
+      };
 
-    app.use("*", async (c, next) => {
-      c.set("db", db);
-      await next();
-    });
-    app.route("/api/sites", hostingRoutes);
+      app.use("*", async (c, next) => {
+        c.set("db", db as any);
+        await next();
+      });
+      app.route("/api/sites", hostingRoutes);
 
-    const response = await app.request(
-      "/api/sites/site-1/domains",
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ hostname: "backup.example.com" }),
-      },
-      {
-        HOSTING_CNAME_TARGET: "hosting.example.com",
-        CLOUDFLARE_ZONE_ID: "zone-1",
-        CLOUDFLARE_API_TOKEN: "token-1",
-      }
-    );
-    const payload = await response.json();
+      const response = await app.request(
+        "/api/sites/site-1/domains",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ hostname: "backup.example.com" }),
+        }
+      );
+      const payload = (await response.json()) as any;
 
-    assert.equal(response.status, 200);
-    assert.equal(payload.alreadyExists, true);
-    assert.deepEqual(payload.domain, existingDomain);
+      assert.equal(response.status, 200);
+      assert.equal(payload.alreadyExists, true);
+      assert.deepEqual(payload.domain, existingDomain);
+    } finally {
+      Object.assign(process.env, originalEnv);
+    }
   });
 
   it("returns the existing same-site domain when Drizzle wraps a hostname unique constraint", async () => {
-    const existingDomain = {
-      id: "domain-1",
-      siteId: "site-1",
-      hostname: "backup.example.com",
-      cnameTarget: "hosting.example.com",
-      status: "pending_dns",
-    };
-    const app = new Hono();
-    const db = {
-      query: {
-        sites: {
-          findFirst: async () => ({ id: "site-1", url: "https://example.com" }),
-        },
-        sitePublications: { findFirst: async () => null },
-        siteDomains: { findFirst: async () => existingDomain },
-      },
-      insert: () => ({
-        values: () => ({
-          returning: async () => {
-            throw new Error(
-              'Failed query: insert into "site_domains" values (...) returning "id"\nparams: site-1,backup.example.com',
-              { cause: { code: "23505", constraint_name: "site_domains_hostname_idx" } }
-            );
+    const originalEnv = { ...process.env };
+    process.env.HOSTING_CNAME_TARGET = "hosting.example.com";
+    process.env.CLOUDFLARE_ZONE_ID = "zone-1";
+    process.env.CLOUDFLARE_API_TOKEN = "token-1";
+
+    try {
+      const existingDomain = {
+        id: "domain-1",
+        siteId: "site-1",
+        hostname: "backup.example.com",
+        cnameTarget: "hosting.example.com",
+        status: "pending_dns",
+      };
+      const app = new Hono<AppEnv>();
+      const db = {
+        query: {
+          sites: {
+            findFirst: async () => ({ id: "site-1", url: "https://example.com" }),
           },
+          sitePublications: { findFirst: async () => null },
+          siteDomains: { findFirst: async () => existingDomain },
+        },
+        insert: () => ({
+          values: () => ({
+            returning: async () => {
+              throw new Error(
+                'Failed query: insert into "site_domains" values (...) returning "id"\nparams: site-1,backup.example.com',
+                { cause: { code: "23505", constraint_name: "site_domains_hostname_idx" } }
+              );
+            },
+          }),
         }),
-      }),
-    };
+      };
 
-    app.use("*", async (c, next) => {
-      c.set("db", db);
-      await next();
-    });
-    app.route("/api/sites", hostingRoutes);
+      app.use("*", async (c, next) => {
+        c.set("db", db as any);
+        await next();
+      });
+      app.route("/api/sites", hostingRoutes);
 
-    const response = await app.request(
-      "/api/sites/site-1/domains",
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ hostname: "backup.example.com" }),
-      },
-      {
-        HOSTING_CNAME_TARGET: "hosting.example.com",
-        CLOUDFLARE_ZONE_ID: "zone-1",
-        CLOUDFLARE_API_TOKEN: "token-1",
-      }
-    );
-    const payload = await response.json();
+      const response = await app.request(
+        "/api/sites/site-1/domains",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ hostname: "backup.example.com" }),
+        }
+      );
+      const payload = (await response.json()) as any;
 
-    assert.equal(response.status, 200);
-    assert.equal(payload.alreadyExists, true);
-    assert.deepEqual(payload.domain, existingDomain);
+      assert.equal(response.status, 200);
+      assert.equal(payload.alreadyExists, true);
+      assert.deepEqual(payload.domain, existingDomain);
+    } finally {
+      Object.assign(process.env, originalEnv);
+    }
   });
 
   it("removes the local domain when Cloudflare custom hostname is already gone", async () => {
@@ -156,9 +165,13 @@ describe("hosting routes", () => {
         headers: { "content-type": "application/json" },
       });
 
+    const originalEnv = { ...process.env };
+    process.env.CLOUDFLARE_ZONE_ID = "zone-1";
+    process.env.CLOUDFLARE_API_TOKEN = "token-1";
+
     try {
       let deleted = false;
-      const app = new Hono();
+      const app = new Hono<AppEnv>();
       const db = {
         query: {
           siteDomains: {
@@ -178,23 +191,23 @@ describe("hosting routes", () => {
       };
 
       app.use("*", async (c, next) => {
-        c.set("db", db);
+        c.set("db", db as any);
         await next();
       });
       app.route("/api/sites", hostingRoutes);
 
       const response = await app.request(
         "/api/sites/site-1/domains/domain-1",
-        { method: "DELETE" },
-        { CLOUDFLARE_ZONE_ID: "zone-1", CLOUDFLARE_API_TOKEN: "token-1" }
+        { method: "DELETE" }
       );
-      const payload = await response.json();
+      const payload = (await response.json()) as any;
 
       assert.equal(response.status, 200);
       assert.equal(payload.success, true);
       assert.equal(deleted, true);
     } finally {
       globalThis.fetch = originalFetch;
+      Object.assign(process.env, originalEnv);
     }
   });
 });

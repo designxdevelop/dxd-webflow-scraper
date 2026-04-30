@@ -1,58 +1,65 @@
 # Infrastructure Setup Guide
 
-All code changes are complete. This document covers the manual infrastructure provisioning and deployment steps needed to go live.
+This document covers the infrastructure provisioning and deployment steps for the current architecture.
 
 ## Architecture Overview
 
 ```
-                 +-----------------------+
-                 |  Cloudflare Workers   |
-                 |  (API - Hono)         |
-                 |                       |
-                 |  R2 bindings          |
-                 |  Hyperdrive -> PG     |
-                 |  Upstash Redis HTTP   |
-                 +----------+------------+
-                            |
-               HTTP enqueue  |  SSE polling
-                            v
-                 +-----------------------+
-                 |  Railway (Worker)     |
-                 |  BullMQ + Playwright  |
-                 |  ioredis (TCP)        |
-                 |  S3 SDK -> R2         |
-                 +-----------------------+
-                            |
-              ioredis TCP   |  S3-compat API
-                            v
-          +-------------+  +----------------+
-          | Upstash     |  | Cloudflare R2  |
-          | Redis       |  | (storage)      |
-          +-------------+  +----------------+
-                            ^
-                            |
-                 +----------+------------+
-                 | Cloudflare Worker     |
-                 | Backup Hosting        |
-                 | client CNAME domains  |
-                 +-----------------------+
-                            |
-              Hyperdrive    |
-                            v
-                 +-----------------------+
-                 |  Railway PostgreSQL   |
-                 +-----------------------+
+┌─────────────────────────────────────────────────────────────┐
+│                        Railway Project                       │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐    │
+│  │   Web UI     │   │    API       │   │    Worker    │    │
+│  │  (Vite SPA)  │   │  (Hono/Node) │   │  (BullMQ)    │    │
+│  │              │   │              │   │  Playwright  │    │
+│  └──────────────┘   └──────────────┘   └──────────────┘    │
+│         │                  │                  │             │
+│         └──────────────────┼──────────────────┘             │
+│                            │                                 │
+│  ┌──────────────┐         │                                 │
+│  │  PostgreSQL  │         │                                 │
+│  │              │◄────────┘                                 │
+│  └──────────────┘                                           │
+│                            │                                 │
+│  ┌──────────────┐         │                                 │
+│  │    Redis     │◄────────┘                                 │
+│  │  (BullMQ)    │                                           │
+│  └──────────────┘                                           │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+                           │
+               S3-compatible API
+                           ▼
+                  ┌─────────────────┐
+                  │  Cloudflare R2  │
+                  │  (archives +    │
+                  │   published)    │
+                  └─────────────────┘
+                           ▲
+                           │
+                  ┌─────────────────┐
+                  │ Hosting Worker  │
+                  │ (Cloudflare)    │
+                  │ Custom hostnames│
+                  └─────────────────┘
 ```
 
----
+## Step 1: Railway Project Setup
 
-## Step 1: Reuse Existing Cloudflare R2 Bucket
+Create a Railway project with these services:
 
-Since you're already using R2, reuse the existing bucket.
+1. **PostgreSQL** — add via Railway template
+2. **Redis** — add via Railway template (or use Upstash/Redis Cloud)
+3. **Web** — deploy from your repo, root directory `apps/web`
+4. **API** — deploy from your repo, root directory `apps/api`
+5. **Worker** — deploy from your repo, root directory `services/worker`
+
+## Step 2: Cloudflare R2 Bucket
 
 1. Go to **Cloudflare Dashboard > R2 Object Storage**
-2. Confirm the bucket name currently used by your worker
-3. Generate/confirm an **S3-compatible API token** with read/write access to that bucket
+2. Create or reuse a bucket (e.g. `dxd-site-scraper`)
+3. Generate an **S3-compatible API token** with read/write access
 4. Note the **Account ID**, **Access Key ID**, **Secret Access Key**
 
 The R2 S3-compatible endpoint is:
@@ -60,242 +67,173 @@ The R2 S3-compatible endpoint is:
 https://<ACCOUNT_ID>.r2.cloudflarestorage.com
 ```
 
----
+## Step 3: Deploy Services to Railway
 
-## Step 2: Create Upstash Redis Instance
+### API Environment Variables
 
-1. Go to **https://console.upstash.com** and create a new Redis database
-2. Note the following values:
-   - **REST URL** (for Workers API): `https://XXXX.upstash.io`
-   - **REST Token** (for Workers API)
-   - **Redis URL** (for worker service): `rediss://default:XXXX@XXXX.upstash.io:6379`
+| Variable | Value |
+|----------|-------|
+| `DATABASE_URL` | PostgreSQL connection string |
+| `REDIS_URL` | Redis connection string |
+| `FRONTEND_URL` | Your web app URL |
+| `AUTH_SECRET` | Random secret for Auth.js |
+| `AUTH_URL` | API base URL |
+| `GITHUB_CLIENT_ID` | GitHub OAuth app client ID |
+| `GITHUB_CLIENT_SECRET` | GitHub OAuth app client secret |
+| `HOSTING_CNAME_TARGET` | Client CNAME target hostname |
+| `CLOUDFLARE_ZONE_ID` | Zone for custom hostnames |
+| `CLOUDFLARE_API_TOKEN` | Token for custom hostname management |
+| `R2_ENDPOINT` | `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` |
+| `R2_ACCESS_KEY_ID` | R2 API token access key |
+| `R2_SECRET_ACCESS_KEY` | R2 API token secret key |
+| `R2_BUCKET` | `dxd-site-scraper` |
+| `R2_REGION` | `auto` |
+| `R2_FORCE_PATH_STYLE` | `true` |
 
-Both the Workers API (HTTP) and the Railway worker (TCP/ioredis) connect to the **same** Upstash Redis instance via different protocols.
+### Web Environment Variables
 
----
+| Variable | Value |
+|----------|-------|
+| `PORT` | `3000` (or whatever Railway assigns) |
+| `NODE_ENV` | `production` |
 
-## Step 3: Create Cloudflare Hyperdrive Configuration
+### Worker Environment Variables
 
-Hyperdrive proxies your Railway PostgreSQL for connection pooling from Workers.
+| Variable | Value |
+|----------|-------|
+| `DATABASE_URL` | Same PostgreSQL connection string |
+| `REDIS_URL` | Same Redis connection string |
+| `WORKER_HTTP_PORT` | `3002` (or Railway assigned port) |
+| `WORKER_API_SECRET` | Shared secret for worker HTTP API |
+| `HOSTING_CNAME_TARGET` | Same as API |
+| `CLOUDFLARE_ZONE_ID` | Same as API |
+| `CLOUDFLARE_API_TOKEN` | Same as API |
+| `R2_ENDPOINT` | Same as API |
+| `R2_ACCESS_KEY_ID` | Same as API |
+| `R2_SECRET_ACCESS_KEY` | Same as API |
+| `R2_BUCKET` | Same as API |
+| `R2_REGION` | Same as API |
+| `R2_FORCE_PATH_STYLE` | `true` |
 
+The worker runs both the BullMQ processor and an HTTP server for receiving enqueue requests from the API.
+
+**Important:** Expose the worker's HTTP port in Railway so the API can reach it.
+
+## Step 4: Deploy Hosting Worker to Cloudflare
+
+The hosting worker (`apps/hosting-worker`) serves published backup sites via custom hostnames.
+
+1. Create a **Hyperdrive** config pointing to your Railway PostgreSQL:
 ```bash
-# From the apps/api directory
-npx wrangler hyperdrive create dxd-postgres \
+cd apps/hosting-worker
+bunx wrangler hyperdrive create dxd-postgres \
   --connection-string="postgres://USER:PASSWORD@HOST:PORT/DATABASE"
 ```
 
-Note the **Hyperdrive Config ID** from the output. Update `apps/api/wrangler.toml`:
-```toml
-[[hyperdrive]]
-binding = "HYPERDRIVE"
-id = "YOUR_HYPERDRIVE_CONFIG_ID"
-```
+2. Update `apps/hosting-worker/wrangler.toml` with the Hyperdrive config ID.
 
----
-
-## Step 4: Optional Data Migration (Only if needed)
-
-If your existing crawler data is already in R2, skip this step.
-
-If you still have crawl data in AWS S3 that must be kept, sync it to R2:
-
+3. Deploy:
 ```bash
-# Install rclone if needed
-brew install rclone
-
-# Configure rclone with both S3 and R2 remotes, then sync
-rclone sync s3:your-bucket-name r2:dxd-storage --progress
+cd apps/hosting-worker
+bunx wrangler deploy
 ```
 
-**Then update the Railway worker's environment variables** to point at R2's S3-compatible API:
+4. Configure a **Cloudflare for SaaS** fallback origin pointing to your hosting worker domain.
 
-| Variable | Value |
-|----------|-------|
-| `S3_ENDPOINT` | `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` |
-| `S3_ACCESS_KEY_ID` | R2 API token access key |
-| `S3_SECRET_ACCESS_KEY` | R2 API token secret key |
-| `S3_BUCKET` | `dxd-storage` |
-| `S3_REGION` | `auto` |
-| `S3_FORCE_PATH_STYLE` | `true` |
+## Step 5: DNS & GitHub OAuth
 
-The worker writes via S3 protocol; the Workers API reads via native R2 bindings. Same bucket.
-
----
-
-## Step 5: Set Cloudflare Workers Secrets
-
-```bash
-cd apps/api
-
-# Auth
-wrangler secret put AUTH_SECRET
-wrangler secret put AUTH_URL          # e.g. https://api.yourdomain.com
-wrangler secret put GITHUB_CLIENT_ID
-wrangler secret put GITHUB_CLIENT_SECRET
-
-# Upstash Redis (HTTP endpoint for Workers)
-wrangler secret put UPSTASH_REDIS_REST_URL
-wrangler secret put UPSTASH_REDIS_REST_TOKEN
-
-# Worker service (Railway internal URL)
-wrangler secret put WORKER_SERVICE_URL    # e.g. https://your-worker.up.railway.app
-wrangler secret put WORKER_API_SECRET     # generate a random secret
-```
-
----
-
-## Step 6: Update Railway Worker Environment
-
-Add these new variables to the worker service on Railway:
-
-| Variable | Value |
-|----------|-------|
-| `REDIS_URL` | Upstash Redis TCP URL: `rediss://default:XXXX@XXXX.upstash.io:6379` |
-| `WORKER_HTTP_PORT` | `3002` (or whatever port Railway exposes) |
-| `WORKER_API_SECRET` | Same secret you set in Step 5 |
-
-The worker now runs both the BullMQ processor and an HTTP server for receiving enqueue requests from the Workers API.
-
-**Important:** Expose the worker's HTTP port in Railway so the Workers API can reach it. The URL should be the value you set for `WORKER_SERVICE_URL` in Step 5.
-
----
-
-## Step 7: Update GitHub OAuth Callback URL
-
-Your GitHub OAuth app's callback URL needs to point to the Workers API domain:
-
-1. Go to **GitHub > Settings > Developer Settings > OAuth Apps**
-2. Update the **Authorization callback URL** to:
+1. Point your API domain to the Railway API service
+2. Point your web domain to the Railway web service
+3. Update your **GitHub OAuth app** callback URL to:
    ```
    https://api.yourdomain.com/api/auth/callback/github
    ```
 
----
-
-## Step 8: Deploy Workers API
+## Step 6: Database Migrations
 
 ```bash
-cd apps/api
-
-# Test locally first
-wrangler dev
-
-# Deploy to production
-wrangler deploy
+bun run db:migrate
 ```
 
----
+## Cutover Checklist
 
-## Step 9: DNS Configuration
-
-If your API is at `api.yourdomain.com`, configure DNS:
-
-**Option A: Custom domain in wrangler.toml**
-Add to `apps/api/wrangler.toml`:
-```toml
-routes = [
-  { pattern = "api.yourdomain.com/*", zone_name = "yourdomain.com" }
-]
-```
-
-**Option B: Workers route in Cloudflare dashboard**
-Go to your domain's Workers Routes and add:
-- Route: `api.yourdomain.com/*`
-- Worker: `dxd-api`
-
----
-
-## Step 10: Cutover Checklist
-
-- [ ] Existing R2 bucket verified (and data sync done only if needed)
-- [ ] Upstash Redis created
-- [ ] Hyperdrive config ID added to `wrangler.toml`
-- [ ] All secrets set via `wrangler secret put`
-- [ ] Worker service updated with R2 S3 endpoint and `WORKER_API_SECRET`
-- [ ] Worker HTTP port exposed on Railway
+- [ ] Railway PostgreSQL running
+- [ ] Railway Redis running
+- [ ] R2 bucket created with API token
+- [ ] API service deployed with all env vars
+- [ ] Web service deployed
+- [ ] Worker service deployed with all env vars
+- [ ] Worker HTTP port exposed and reachable from API
+- [ ] Hosting Worker deployed to Cloudflare
+- [ ] Hyperdrive config created and working
 - [ ] GitHub OAuth callback URL updated
-- [ ] `wrangler deploy` succeeds
-- [ ] DNS points to Workers
-- [ ] Test: OAuth login flow works
+- [ ] DNS pointing to Railway services
+- [ ] Test: OAuth login works
 - [ ] Test: Create a crawl, verify it runs and SSE events arrive
-- [ ] Test: Preview an archived site
-- [ ] Test: Download a zip archive
-- [ ] Test: Publish a completed crawl and verify `published/<site>/<crawl>/index.html` exists in R2
-- [ ] Test: Add a client-owned CNAME hostname and wait for Cloudflare SSL status to become active
-- [ ] Test: Visit the client hostname and verify the hosted backup loads from R2
-- [ ] Keep old Railway API running for 48-72h as hot standby
-- [ ] Tear down old Railway API after stabilization
-
----
+- [ ] Test: Download a ZIP archive
+- [ ] Test: Publish a completed crawl
+- [ ] Test: Add a client CNAME hostname
 
 ## Rollback
 
-If anything goes wrong:
-1. Revert DNS to point back to Railway API
-2. The Railway API still works against the same Postgres and Redis
-3. No data is lost — R2 and Postgres are the same for both runtimes
+If anything goes wrong, all services run on Railway with the same Postgres and Redis. Revert DNS or Railway service redeployment. No external dependencies other than R2 (which is just storage).
 
----
+## Environment Variables Reference
 
-## New Environment Variables Reference
+### API Service (Railway)
 
-### Workers API (Cloudflare)
-
-Set via `wrangler.toml` [vars]:
-- `NODE_ENV` — `production`
-- `FRONTEND_URL` — Frontend app URL
+- `DATABASE_URL` — PostgreSQL connection string
+- `REDIS_URL` — Redis connection string
+- `FRONTEND_URL` — Web app URL
 - `CORS_ALLOWED_ORIGINS` — Comma-separated extra origins
-- `HOSTING_CNAME_TARGET` — hostname clients CNAME to for backup hosting
-
-Set via `wrangler secret put`:
 - `AUTH_SECRET` — Auth.js secret
 - `AUTH_URL` — API base URL
 - `GITHUB_CLIENT_ID` — GitHub OAuth client ID
 - `GITHUB_CLIENT_SECRET` — GitHub OAuth client secret
-- `UPSTASH_REDIS_REST_URL` — Upstash HTTP endpoint
-- `UPSTASH_REDIS_REST_TOKEN` — Upstash HTTP token
-- `WORKER_SERVICE_URL` — Railway worker HTTP URL
-- `WORKER_API_SECRET` — Shared auth secret for worker HTTP API
-- `CLOUDFLARE_ZONE_ID` — zone configured for Cloudflare for SaaS custom hostnames
-- `CLOUDFLARE_API_TOKEN` — token with permission to manage custom hostnames
+- `HOSTING_CNAME_TARGET` — Client CNAME target hostname
+- `CLOUDFLARE_ZONE_ID` — Zone for custom hostnames
+- `CLOUDFLARE_API_TOKEN` — Token for custom hostname management
+- `R2_*` — R2 storage credentials
 
-Bindings (in wrangler.toml):
-- `STORAGE_BUCKET` — R2 bucket binding
-- `HYPERDRIVE` — Hyperdrive binding to Railway Postgres
+### Web Service (Railway)
 
-### Backup Hosting Worker (Cloudflare)
-
-- Deploy `apps/hosting-worker` with the same `STORAGE_BUCKET` and `HYPERDRIVE` bindings.
-- Configure Cloudflare for SaaS/custom hostnames on the zone that owns your fallback hostname.
-- Set the API/Railway `HOSTING_CNAME_TARGET` to that fallback hostname. Clients create `CNAME backup.client.com -> HOSTING_CNAME_TARGET`.
-- The hosting Worker only serves domains present in `site_domains` with `status = active` and an active published backup.
+- `PORT` — Server port
+- `NODE_ENV` — `production`
 
 ### Worker Service (Railway)
 
-- `DATABASE_URL` — PostgreSQL connection string (unchanged)
-- `REDIS_URL` — Upstash Redis TCP URL (was local/Railway Redis)
-- `WORKER_HTTP_PORT` — Port for HTTP API server (default: 3002)
+- `DATABASE_URL` — PostgreSQL connection string
+- `REDIS_URL` — Redis connection string
+- `WORKER_HTTP_PORT` — HTTP API port
 - `WORKER_API_SECRET` — Shared auth secret
-- `HOSTING_CNAME_TARGET` — same client CNAME target shown in the dashboard
-- `CLOUDFLARE_ZONE_ID` — optional; enables automated custom hostname provisioning
-- `CLOUDFLARE_API_TOKEN` — optional; enables automated custom hostname provisioning
-- `S3_ENDPOINT` — R2 S3-compatible endpoint (was AWS S3)
-- `S3_ACCESS_KEY_ID` — R2 API token access key
-- `S3_SECRET_ACCESS_KEY` — R2 API token secret key
-- `S3_BUCKET` — `dxd-storage`
-- `S3_REGION` — `auto`
+- `HOSTING_CNAME_TARGET` — Same as API
+- `CLOUDFLARE_ZONE_ID` — Same as API
+- `CLOUDFLARE_API_TOKEN` — Same as API
+- `R2_*` — Same R2 credentials as API
 
-### Scraper Tuning (Optional)
+### Hosting Worker (Cloudflare)
 
-- `CRAWL_PAGE_MAX_RETRIES` — Max retries per page (default: 2)
-- `CRAWL_PAGE_RETRY_DELAY_MS` — Base delay for retry backoff (default: 2000)
-- `MAX_SITE_CONCURRENCY` — Runtime cap for per-site crawl concurrency (recommended production cap: `3`-`5`)
-- `MAX_CRAWL_CONCURRENCY` — Max concurrent pages across all browsers (recommended production cap: `4`)
-- `CRAWL_ASSET_CONCURRENCY` — Max concurrent HTML rewrite asset downloads per page (default: `6`)
-- `CRAWL_PAGE_ASSET_CONCURRENCY` — Max concurrent dynamic page asset downloads (default: `6`)
-- `CRAWL_MAX_BINARY_ASSET_BYTES` — Skip very large image/font downloads when content length exceeds this byte limit
-- `CRAWL_MAX_MEDIA_ASSET_BYTES` — Skip very large media downloads when content length exceeds this byte limit
-- `CRAWL_MEMORY_LOG_EVERY_PAGES` — Emit a crawl memory snapshot every N processed pages (default: `25`)
-- `CRAWL_RSS_SAFETY_THRESHOLD_PERCENT` — Clamp effective concurrency once RSS reaches this share of the container limit (default: `0.85`)
-- `ARCHIVE_ZLIB_LEVEL` — ZIP compression level for crawl archives (default: `1`)
-- `WORKER_ARCHIVE_CONCURRENCY` — Concurrent archive jobs inside the worker service (default: `1`)
+- `HYPERDRIVE` — Hyperdrive binding to Railway Postgres
+- `STORAGE_BUCKET` — R2 bucket binding
+
+## Local Development
+
+```bash
+# Start dependencies
+docker-compose up -d
+
+# Install dependencies
+bun install
+
+# Run migrations
+bun run db:migrate
+
+# Start API
+bun run start:api
+
+# Start web (separate terminal)
+bun run start:web
+
+# Start worker (separate terminal)
+bun run start:worker
+```

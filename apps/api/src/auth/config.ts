@@ -32,9 +32,6 @@ function normalizeCookieDomain(cookieDomain?: string): string | undefined {
 /**
  * Returns a function suitable for initAuthConfig() that creates AuthConfig
  * using the provided database client and options.
- *
- * Workers: db comes from context, env vars from bindings.
- * Node: db comes from singleton, env vars from process.env.
  */
 export function getAuthConfigFactory(db: Database, options: AuthConfigOptions) {
   return function getAuthConfig(): AuthConfig {

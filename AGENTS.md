@@ -1,7 +1,5 @@
 # Agent Instructions
 
-This repository is optimized for AI coding agents (Codex, Claude Code, Cursor, Copilot).
-
 ## Project Map
 
 - `apps/api`: Hono API service (Node runtime)
@@ -23,7 +21,7 @@ This repository is optimized for AI coding agents (Codex, Claude Code, Cursor, C
 - Keep route logic in `apps/api/src/routes` thin; move reusable logic into `*.utils.ts` next to routes.
 - Prefer shared packages for cross-service contracts (`@dxd/db`, `@dxd/storage`, `@dxd/scraper`).
 - Avoid duplicating schema or protocol definitions between API and worker.
-- Add tests for bugfixes and for non-trivial route/util behavior.
+- Verify behavior with the relevant test coverage; add a focused test when the changed behavior is not covered.
 
 ## Key Runtime Boundaries
 
@@ -31,8 +29,6 @@ This repository is optimized for AI coding agents (Codex, Claude Code, Cursor, C
 - Worker owns crawl execution state machine (`services/worker/src/processor.ts`).
 - SSE stream for live crawl updates is exposed at `GET /api/sse/crawls/:id`.
 
-## High-Risk Areas (read before editing)
+## Crawl and upload lifecycle
 
-- `services/worker/src/processor.ts`: long-running job lifecycle, retries, upload transitions.
-- `packages/scraper/src/page-processor.ts`: static-vs-playwright path decisions.
-- `packages/storage/src/s3.ts`: multipart upload and retry behavior.
+- Before changing crawl execution, rendering-path selection, multipart upload, or retries, inspect `services/worker/src/processor.ts`, `packages/scraper/src/page-processor.ts`, and `packages/storage/src/s3.ts`.

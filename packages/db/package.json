@@ -13,12 +13,12 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@auth/core": "^0.34.3",
-    "drizzle-orm": "^0.44.2",
-    "postgres": "^3.4.7"
+    "@auth/core": "^0.41.3",
+    "drizzle-orm": "^0.45.3",
+    "postgres": "^3.4.9"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^22.20.5",
     "typescript": "^5.9.3"
   }
 }

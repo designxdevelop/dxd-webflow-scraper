@@ -24,8 +24,12 @@
     "db:push": "turbo db:push --filter=@dxd/api"
   },
   "devDependencies": {
-    "turbo": "^2.5.0",
+    "turbo": "^2.11.7",
     "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "esbuild": "0.28.2",
+    "fast-xml-parser": "5.11.2"
   },
   "packageManager": "bun@1.3.9",
   "engines": {

@@ -9,18 +9,18 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as SettingsRouteImport } from './routes/settings'
-import { Route as LoginRouteImport } from './routes/login'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as SitesIndexRouteImport } from './routes/sites/index'
+import { Route as LoginRouteImport } from './routes/login'
+import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as CrawlsIndexRouteImport } from './routes/crawls/index'
-import { Route as SitesNewRouteImport } from './routes/sites/new'
-import { Route as SitesSiteIdRouteImport } from './routes/sites/$siteId'
 import { Route as CrawlsCrawlIdRouteImport } from './routes/crawls/$crawlId'
+import { Route as SitesIndexRouteImport } from './routes/sites/index'
+import { Route as SitesSiteIdRouteImport } from './routes/sites/$siteId'
+import { Route as SitesNewRouteImport } from './routes/sites/new'
 
-const SettingsRoute = SettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LoginRoute = LoginRouteImport.update({
@@ -28,14 +28,9 @@ const LoginRoute = LoginRouteImport.update({
   path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SitesIndexRoute = SitesIndexRouteImport.update({
-  id: '/sites/',
-  path: '/sites/',
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CrawlsIndexRoute = CrawlsIndexRouteImport.update({
@@ -43,9 +38,14 @@ const CrawlsIndexRoute = CrawlsIndexRouteImport.update({
   path: '/crawls/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const SitesNewRoute = SitesNewRouteImport.update({
-  id: '/sites/new',
-  path: '/sites/new',
+const CrawlsCrawlIdRoute = CrawlsCrawlIdRouteImport.update({
+  id: '/crawls/$crawlId',
+  path: '/crawls/$crawlId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SitesIndexRoute = SitesIndexRouteImport.update({
+  id: '/sites/',
+  path: '/sites/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SitesSiteIdRoute = SitesSiteIdRouteImport.update({
@@ -53,9 +53,9 @@ const SitesSiteIdRoute = SitesSiteIdRouteImport.update({
   path: '/sites/$siteId',
   getParentRoute: () => rootRouteImport,
 } as any)
-const CrawlsCrawlIdRoute = CrawlsCrawlIdRouteImport.update({
-  id: '/crawls/$crawlId',
-  path: '/crawls/$crawlId',
+const SitesNewRoute = SitesNewRouteImport.update({
+  id: '/sites/new',
+  path: '/sites/new',
   getParentRoute: () => rootRouteImport,
 } as any)
 
@@ -136,11 +136,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/settings': {
-      id: '/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof SettingsRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/login': {
@@ -150,18 +150,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/sites/': {
-      id: '/sites/'
-      path: '/sites'
-      fullPath: '/sites/'
-      preLoaderRoute: typeof SitesIndexRouteImport
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/crawls/': {
@@ -171,11 +164,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CrawlsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/sites/new': {
-      id: '/sites/new'
-      path: '/sites/new'
-      fullPath: '/sites/new'
-      preLoaderRoute: typeof SitesNewRouteImport
+    '/crawls/$crawlId': {
+      id: '/crawls/$crawlId'
+      path: '/crawls/$crawlId'
+      fullPath: '/crawls/$crawlId'
+      preLoaderRoute: typeof CrawlsCrawlIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sites/': {
+      id: '/sites/'
+      path: '/sites'
+      fullPath: '/sites/'
+      preLoaderRoute: typeof SitesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/sites/$siteId': {
@@ -185,11 +185,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SitesSiteIdRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/crawls/$crawlId': {
-      id: '/crawls/$crawlId'
-      path: '/crawls/$crawlId'
-      fullPath: '/crawls/$crawlId'
-      preLoaderRoute: typeof CrawlsCrawlIdRouteImport
+    '/sites/new': {
+      id: '/sites/new'
+      path: '/sites/new'
+      fullPath: '/sites/new'
+      preLoaderRoute: typeof SitesNewRouteImport
       parentRoute: typeof rootRouteImport
     }
   }

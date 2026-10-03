@@ -9,12 +9,12 @@
   },
   "dependencies": {
     "@dxd/db": "workspace:*",
-    "drizzle-orm": "^0.44.2",
-    "postgres": "^3.4.7"
+    "drizzle-orm": "^0.45.3",
+    "postgres": "^3.4.9"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20241230.0",
+    "@cloudflare/workers-types": "^4.20260702.1",
     "typescript": "^5.9.3",
-    "wrangler": "^3.99.0"
+    "wrangler": "^4.147.0"
   }
 }

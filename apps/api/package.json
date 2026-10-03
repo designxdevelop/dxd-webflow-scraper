@@ -12,24 +12,24 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
-    "@auth/core": "^0.34.3",
-    "@auth/drizzle-adapter": "^1.11.1",
+    "@auth/core": "^0.41.3",
+    "@auth/drizzle-adapter": "^1.11.3",
     "@dxd/storage": "workspace:*",
-    "@hono/auth-js": "^1.1.0",
-    "@hono/node-server": "^1.14.1",
+    "@hono/auth-js": "^1.1.1",
+    "@hono/node-server": "^1.19.17",
     "@hono/zod-validator": "^0.5.0",
-    "bullmq": "^5.52.0",
-    "client-zip": "^2.4.6",
-    "cron-parser": "^5.5.0",
-    "drizzle-orm": "^0.44.2",
-    "hono": "^4.7.7",
-    "ioredis": "^5.6.1",
-    "postgres": "^3.4.7",
-    "zod": "^3.25.17"
+    "bullmq": "^5.81.5",
+    "client-zip": "^2.5.1",
+    "cron-parser": "^5.10.1",
+    "drizzle-orm": "^0.45.3",
+    "hono": "^4.13.12",
+    "ioredis": "^5.11.1",
+    "postgres": "^3.4.9",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "drizzle-kit": "^0.31.1",
+    "@types/node": "^22.20.5",
+    "drizzle-kit": "^0.31.11",
     "typescript": "^5.9.3"
   }
 }

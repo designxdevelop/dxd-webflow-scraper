@@ -1,6 +1,9 @@
-import type { StorageAdapter } from "@dxd/storage";
 import type { Database } from "./db/client.js";
-import type { QueueClient, PubSubClient } from "./queue/client.js";
+import type { QueueClient } from "./queue/client.js";
+
+export interface ArchiveStorage {
+  get(key: string): Promise<ReadableStream | null>;
+}
 
 /**
  * Variables set per-request via context middleware.
@@ -8,9 +11,8 @@ import type { QueueClient, PubSubClient } from "./queue/client.js";
  */
 export type AppVariables = {
   db: Database;
-  storage: StorageAdapter;
+  storage: ArchiveStorage;
   queue: QueueClient;
-  pubsub: PubSubClient;
   // User set by auth middleware
   user: {
     id: string;

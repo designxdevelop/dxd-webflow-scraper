@@ -1,0 +1,44 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "dxd-archiver-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  // Cutover: add { "pattern": "zip-api.designxdevelop.com", "custom_domain": false, "zone_name": "designxdevelop.com" }
+  "routes": [],
+
+  // Every minute: schedules + wake the crawler. No-op until CRAWLER_OWNS_QUEUE = "true".
+  "triggers": { "crons": ["* * * * *"] },
+
+  "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "c0bd95a95ffc438aa3ebb25f8766b6a5" }],
+  "r2_buckets": [{ "binding": "STORAGE_BUCKET", "bucket_name": "dxd-site-scraper" }],
+
+  "containers": [
+    {
+      "class_name": "Crawler",
+      "image": "../../services/worker/Dockerfile",
+      "image_build_context": "../..",
+      "instance_type": "standard-1",
+      "max_instances": 1,
+      // Don't replace a running crawl on deploy for its first hour.
+      "rollout_active_grace_period": 3600
+    }
+  ],
+  "durable_objects": { "bindings": [{ "name": "CRAWLER", "class_name": "Crawler" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Crawler"] }],
+
+  "vars": {
+    "NODE_ENV": "production",
+    "FRONTEND_URL": "https://zip.designxdevelop.com",
+    "AUTH_COOKIE_DOMAIN": "designxdevelop.com",
+    "CRAWLER_OWNS_QUEUE": "false",
+    "STORAGE_TYPE": "s3",
+    "R2_BUCKET": "dxd-site-scraper",
+    "R2_REGION": "auto"
+  }
+  // Secrets (wrangler secret put): AUTH_SECRET, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET,
+  // CRAWLER_DATABASE_URL, R2_ENDPOINT, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY,
+  // CRAWLER_TRIGGER_SECRET, plus any hosting vars (HOSTING_CNAME_TARGET, CLOUDFLARE_ZONE_ID, CLOUDFLARE_API_TOKEN).
+}

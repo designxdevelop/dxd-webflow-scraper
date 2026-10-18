@@ -1,10 +1,11 @@
-FROM oven/bun:1.3.9
+# Crawler image for the Cloudflare Container (build context: repo root).
+FROM node:22-bookworm-slim
+
+COPY --from=oven/bun:1.3.9 /usr/local/bin/bun /usr/local/bin/bun
 
 WORKDIR /app
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-
-RUN mkdir -p /ms-playwright
 
 COPY package.json bun.lock turbo.json tsconfig.json ./
 COPY apps/api/package.json apps/api/package.json
@@ -16,8 +17,10 @@ COPY packages/db/package.json packages/db/package.json
 COPY services/worker/package.json services/worker/package.json
 
 RUN bun install --frozen-lockfile --ignore-scripts
-# From repo root, bunx would fetch latest Playwright; cwd must match @dxd/scraper’s locked version.
-RUN cd packages/scraper && bunx playwright install --with-deps chromium
+# Install the browser with Node: Bun's fetch fails Playwright's CDN TLS check (ERR_TLS_CERT_ALTNAME_INVALID).
+# Headless launches only need chromium-headless-shell.
+RUN node packages/scraper/node_modules/playwright/cli.js install --with-deps --only-shell chromium \
+  && rm -rf /var/lib/apt/lists/*
 
 COPY . .
 

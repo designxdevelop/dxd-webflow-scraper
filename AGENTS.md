@@ -2,9 +2,9 @@
 
 ## Project Map
 
-- `apps/api`: Hono API service (Node runtime)
-- `apps/web`: Vite + React + TanStack Router dashboard
-- `services/worker`: BullMQ worker for crawl execution and scheduling
+- `apps/api`: Hono API on Cloudflare Workers (Hyperdrive, R2); also hosts the `Crawler` container Durable Object and the cron scheduler
+- `apps/web`: Vite + React + TanStack Router dashboard (Workers static assets)
+- `services/worker`: crawler process run in a Cloudflare Container; drains `status = 'pending'` rows from Postgres, then exits
 - `packages/scraper`: Shared crawling and rewrite engine
 - `packages/storage`: Shared storage adapters (local, S3, R2)
 - `packages/db`: Shared Drizzle schema + DB client
@@ -25,9 +25,9 @@
 
 ## Key Runtime Boundaries
 
-- API enqueues jobs through `QueueClient` abstraction (`apps/api/src/queue/client.ts`).
+- Postgres is the queue. API inserts `pending` rows and wakes the container via `QueueClient` (`apps/api/src/queue/client.ts`).
 - Worker owns crawl execution state machine (`services/worker/src/processor.ts`).
-- SSE stream for live crawl updates is exposed at `GET /api/sse/crawls/:id`.
+- Live crawl view polls `GET /api/crawls/:id` (logs/progress persisted in the DB). No Redis.
 
 ## Crawl and upload lifecycle
 

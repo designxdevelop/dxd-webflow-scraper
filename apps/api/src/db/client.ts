@@ -12,28 +12,3 @@ export function createDbClient(connectionString: string) {
 
 export type Database = ReturnType<typeof createDbClient>;
 
-// ---------------------------------------------------------------------------
-// Legacy singleton for backward compat during migration.
-// Routes that haven't been migrated to context-based deps can still import this.
-// Will be removed once all routes use c.get("db").
-// ---------------------------------------------------------------------------
-let _singleton: Database | null = null;
-
-/** @deprecated Use c.get("db") from Hono context instead. */
-export function getDb(): Database {
-  if (!_singleton) {
-    const connectionString = process.env.DATABASE_URL;
-    if (!connectionString) {
-      throw new Error("DATABASE_URL environment variable is required");
-    }
-    _singleton = createDbClient(connectionString);
-  }
-  return _singleton;
-}
-
-/** @deprecated Singleton kept for migration period. */
-export const db = new Proxy({} as Database, {
-  get(_target, prop, receiver) {
-    return Reflect.get(getDb(), prop, receiver);
-  },
-});

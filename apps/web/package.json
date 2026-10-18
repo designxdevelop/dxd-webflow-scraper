@@ -5,10 +5,10 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "start": "node server.mjs",
     "preview": "vite preview",
     "lint": "tsc --noEmit",
-    "test": "bun test src/lib"
+    "test": "bun test src/lib",
+    "deploy": "VITE_API_URL=https://zip-api.designxdevelop.com bun run build && wrangler deploy"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.104.1",
@@ -30,6 +30,7 @@
     "@vitejs/plugin-react": "^6.1.1",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3",
-    "vite": "^8.3.2"
+    "vite": "^8.3.2",
+    "wrangler": "^4.147.0"
   }
 }

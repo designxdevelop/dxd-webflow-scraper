@@ -144,17 +144,3 @@ export function getAuthConfigFactory(db: Database, options: AuthConfigOptions) {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Legacy export for backward compatibility during migration.
-// The Node entry point now uses getAuthConfigFactory() directly via createApp().
-// ---------------------------------------------------------------------------
-
-/** @deprecated Use getAuthConfigFactory() instead. */
-export function getAuthConfig(): AuthConfig {
-  // This is only called if something still imports the old API.
-  // It relies on the db singleton proxy from client.ts.
-  const { db } = require("../db/client.js") as { db: Database };
-  const isProduction = process.env.NODE_ENV === "production";
-  const frontendUrl = process.env.FRONTEND_URL || "https://archiver.designxdevelop.com";
-  return getAuthConfigFactory(db, { isProduction, frontendUrl })();
-}

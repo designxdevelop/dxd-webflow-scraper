@@ -2,9 +2,8 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { crawlsApi } from "@/lib/api";
-import { useCrawlLogs } from "@/lib/hooks/useCrawlLogs";
 import { formatToMountainTime, formatToMountainTimeOnly } from "@/lib/date";
-import { ArrowLeft, Download, XCircle, Wifi, WifiOff, Ban } from "lucide-react";
+import { ArrowLeft, Download, XCircle, Wifi, Ban } from "lucide-react";
 import { useEffect, useRef } from "react";
 
 export const Route = createFileRoute("/crawls/$crawlId")({
@@ -22,7 +21,7 @@ function CrawlDetailPage() {
     refetchInterval: (query) => {
       // Stop polling once crawl is complete
       const status = query.state.data?.crawl?.status;
-      return status === "running" || status === "pending" || status === "uploading"
+      return status === "running" || status === "pending" || status === "archiving" || status === "uploading"
         ? 2000
         : false;
     },
@@ -56,16 +55,17 @@ function CrawlDetailPage() {
     },
   });
 
-  // Connect to SSE for live logs if crawl is active
-  const isActive = data?.crawl?.status === "running" || data?.crawl?.status === "uploading";
-  const { logs: liveLogs, progress, connected } = useCrawlLogs(isActive ? crawlId : null);
+  // Live view = the 2s poll above (logs and progress come from the DB).
+  const isActive =
+    data?.crawl?.status === "running" || data?.crawl?.status === "archiving" || data?.crawl?.status === "uploading";
+  const logCount = data?.crawl?.logs?.length ?? 0;
 
   // Auto-scroll to bottom of logs
   useEffect(() => {
     if (logsEndRef.current) {
       logsEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
-  }, [liveLogs]);
+  }, [logCount]);
 
   if (isLoading) {
     return (
@@ -89,15 +89,14 @@ function CrawlDetailPage() {
   }
 
   const { crawl } = data;
-  const displayProgress = progress || {
+  const displayProgress = {
     total: crawl.totalPages || 0,
     succeeded: crawl.succeededPages || 0,
     failed: crawl.failedPages || 0,
   };
   
-  // Upload progress: prefer live SSE data, fall back to database values
-  const uploadProgress = crawl.status === "uploading" 
-    ? (progress?.upload || {
+  const uploadProgress = crawl.status === "uploading"
+    ? {
         totalBytes: crawl.uploadTotalBytes || 0,
         uploadedBytes: crawl.uploadUploadedBytes || 0,
         filesTotal: crawl.uploadFilesTotal || 1,
@@ -106,10 +105,10 @@ function CrawlDetailPage() {
         percent: crawl.uploadTotalBytes 
           ? Math.round(((crawl.uploadUploadedBytes || 0) / crawl.uploadTotalBytes) * 100)
           : 0,
-      })
+      }
     : undefined;
 
-  const allLogs = dedupeLogs([...(crawl.logs || []).reverse(), ...liveLogs]);
+  const allLogs = dedupeLogs([...(crawl.logs || [])].reverse());
 
   return (
     <div className="p-4 md:p-8 max-w-7xl mx-auto">
@@ -136,17 +135,8 @@ function CrawlDetailPage() {
               <StatusBadge status={crawl.status || "unknown"} />
               {isActive && (
                 <span className="flex items-center gap-1.5 text-xs font-mono">
-                  {connected ? (
-                    <>
-                      <Wifi size={14} style={{ color: "#22c55e" }} />
-                      <span style={{ color: "#22c55e" }}>Live</span>
-                    </>
-                  ) : (
-                    <>
-                      <WifiOff size={14} style={{ color: "#f59e0b" }} />
-                      <span style={{ color: "#f59e0b" }}>Connecting...</span>
-                    </>
-                  )}
+                  <Wifi size={14} style={{ color: "#22c55e" }} />
+                  <span style={{ color: "#22c55e" }}>Live</span>
                 </span>
               )}
             </div>
@@ -272,13 +262,6 @@ function CrawlDetailPage() {
             >
               <h3 className="text-xs font-semibold mb-2" style={{ color: "#f87171" }}>Error</h3>
               <p className="text-sm" style={{ color: "#fca5a5" }}>{crawl.errorMessage}</p>
-            </div>
-          )}
-
-          {progress?.currentUrl && (
-            <div className="card-dark p-4">
-              <h3 className="text-xs font-semibold mb-2" style={{ color: "#a1a1aa" }}>Current URL</h3>
-              <p className="text-xs font-mono truncate" style={{ color: "#71717a" }}>{progress.currentUrl}</p>
             </div>
           )}
 

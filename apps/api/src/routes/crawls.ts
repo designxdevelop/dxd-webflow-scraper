@@ -179,7 +179,6 @@ app.post(
 // Cancel a crawl
 app.post("/:id/cancel", async (c) => {
   const db = c.get("db");
-  const queue = c.get("queue");
   const id = c.req.param("id");
 
   const crawl = await db.query.crawls.findFirst({
@@ -192,10 +191,6 @@ app.post("/:id/cancel", async (c) => {
 
   if (crawl.status !== "pending" && crawl.status !== "running" && crawl.status !== "archiving" && crawl.status !== "uploading") {
     return c.json({ error: "Crawl cannot be cancelled" }, 400);
-  }
-
-  if (crawl.status === "pending") {
-    await queue.removeCrawlJob(id);
   }
 
   const [updated] = await db
@@ -237,12 +232,12 @@ app.get("/:id/download", async (c) => {
   const archivePath = crawl.outputPath.endsWith(".zip") ? crawl.outputPath : `${crawl.outputPath}.zip`;
 
   try {
-    const archiveExists = await storage.exists(archivePath);
-    if (!archiveExists) {
+    const archive = await storage.get(archivePath);
+    if (!archive) {
       return c.json({ error: "Archive not found" }, 404);
     }
 
-    return new Response(storage.readStream(archivePath), {
+    return new Response(archive, {
       headers: {
         "Content-Type": "application/zip",
         "Content-Disposition": `attachment; filename="${filename}"`,

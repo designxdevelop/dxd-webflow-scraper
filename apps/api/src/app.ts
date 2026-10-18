@@ -9,7 +9,6 @@ import { requireAuth } from "./auth/middleware.js";
 import { sitesRoutes } from "./routes/sites.js";
 import { crawlsRoutes } from "./routes/crawls.js";
 import { settingsRoutes } from "./routes/settings.js";
-import { sseRoutes } from "./routes/sse.js";
 import { previewRoutes } from "./routes/preview.js";
 import { hostingRoutes } from "./routes/hosting.js";
 
@@ -79,20 +78,6 @@ export function createApp(config: AppConfig) {
     })
   );
 
-  // Ensure SSE responses include CORS headers
-  app.use("/api/sse/*", async (c, next) => {
-    await next();
-
-    const origin = c.req.header("origin");
-    if (!isAllowedOrigin(origin)) {
-      return;
-    }
-
-    c.res.headers.set("Access-Control-Allow-Origin", origin);
-    c.res.headers.set("Access-Control-Allow-Credentials", "true");
-    c.res.headers.set("Vary", "Origin");
-  });
-
   // Health check (public)
   app.get("/health", (c) => c.json({ status: "ok", timestamp: new Date().toISOString() }));
 
@@ -119,7 +104,6 @@ export function createApp(config: AppConfig) {
   app.use("/api/sites/*", requireAuth);
   app.use("/api/crawls/*", requireAuth);
   app.use("/api/settings/*", requireAuth);
-  app.use("/api/sse/*", requireAuth);
   app.use("/api/sites/*/hosting", requireAuth);
   app.use("/api/sites/*/publications", requireAuth);
   app.use("/api/sites/*/domains/*", requireAuth);
@@ -127,7 +111,6 @@ export function createApp(config: AppConfig) {
   app.route("/api/sites", sitesRoutes);
   app.route("/api/crawls", crawlsRoutes);
   app.route("/api/settings", settingsRoutes);
-  app.route("/api/sse", sseRoutes);
   app.route("/api/sites", hostingRoutes);
 
   // Defense-in-depth: keep preview responses out of search indexes.

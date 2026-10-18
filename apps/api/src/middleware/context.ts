@@ -1,17 +1,15 @@
 import { createMiddleware } from "hono/factory";
-import type { AppEnv } from "../env.js";
-import type { StorageAdapter } from "@dxd/storage";
+import type { AppEnv, ArchiveStorage } from "../env.js";
 import type { Database } from "../db/client.js";
-import type { QueueClient, PubSubClient } from "../queue/client.js";
+import type { QueueClient } from "../queue/client.js";
 
 /**
  * Dependencies injected into the Hono app.
  */
 export interface AppDeps {
   db: Database;
-  storage: StorageAdapter;
+  storage: ArchiveStorage;
   queue: QueueClient;
-  pubsub: PubSubClient;
 }
 
 /**
@@ -23,7 +21,6 @@ export function contextMiddleware(deps: AppDeps) {
     c.set("db", deps.db);
     c.set("storage", deps.storage);
     c.set("queue", deps.queue);
-    c.set("pubsub", deps.pubsub);
     await next();
   });
 }

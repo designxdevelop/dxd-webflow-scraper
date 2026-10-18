@@ -1,9 +1,9 @@
 version: "3.8"
 
-# Local development only. Production uses PlanetScale Postgres; there is no Redis.
+# Local development only. Production uses PlanetScale Postgres 18; there is no Redis.
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_USER: dxd
       POSTGRES_PASSWORD: dxd
@@ -11,7 +11,9 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      # Postgres 18 images keep data in a versioned subdir, so mount the parent. Fresh volume:
+      # an old postgres_data (16) volume can't be opened by 18 (`docker volume rm` it when unused).
+      - postgres18_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U dxd -d scraper"]
       interval: 5s
@@ -19,4 +21,4 @@ services:
       retries: 5
 
 volumes:
-  postgres_data:
+  postgres18_data:

@@ -12,6 +12,7 @@ binding = "STORAGE_BUCKET"
 bucket_name = "dxd-site-scraper"
 
 # dxd-site-archiver-db -> PlanetScale dxd-apps / archiver via PgBouncer (port 6432), shared with the API Worker.
+# Query caching is disabled on this config (the API UI needs fresh crawl status).
 [[hyperdrive]]
 binding = "HYPERDRIVE"
 id = "c0bd95a95ffc438aa3ebb25f8766b6a5"

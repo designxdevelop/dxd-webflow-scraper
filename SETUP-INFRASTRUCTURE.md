@@ -60,13 +60,14 @@ The API and hosting Workers use the R2 binding `STORAGE_BUCKET` instead of keys.
 
 ## Step 3: Hyperdrive
 
-The API and hosting Workers share Hyperdrive config `dxd-site-archiver-db` (`c0bd95a95ffc438aa3ebb25f8766b6a5`), pointed at PlanetScale's PgBouncer on port 6432 with an origin connection limit of 5. If it ever needs to be recreated:
+The API and hosting Workers share Hyperdrive config `dxd-site-archiver-db` (`c0bd95a95ffc438aa3ebb25f8766b6a5`), pointed at PlanetScale's PgBouncer on port 6432 with an origin connection limit of 5 and query caching disabled (the UI polls crawl status and must see fresh rows). If it ever needs to be recreated:
 
 ```bash
 cd apps/api
 bunx wrangler hyperdrive create dxd-site-archiver-db \
   --connection-string="postgres://USER:PASSWORD@us-east-3.pg.psdb.cloud:6432/archiver" \
-  --origin-connection-limit=5
+  --origin-connection-limit=5 \
+  --caching-disabled
 ```
 
 Then update the `hyperdrive` id in both `apps/api/wrangler.jsonc` and `apps/hosting-worker/wrangler.toml`.

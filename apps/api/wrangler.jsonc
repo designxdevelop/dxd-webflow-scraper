@@ -16,6 +16,7 @@
   "triggers": { "crons": ["* * * * *"] },
 
   // dxd-site-archiver-db -> PlanetScale dxd-apps / archiver via PgBouncer (port 6432), origin connection limit 5.
+  // Query caching disabled: the UI polls crawl status and must see fresh rows.
   "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "c0bd95a95ffc438aa3ebb25f8766b6a5" }],
   "r2_buckets": [{ "binding": "STORAGE_BUCKET", "bucket_name": "dxd-site-scraper" }],
 

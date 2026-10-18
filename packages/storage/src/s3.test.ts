@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
+import { describe, test } from "node:test";
 import { toParts } from "./s3.js";
 
 async function collect(chunks: number[], partSize: number) {
@@ -14,12 +15,12 @@ async function collect(chunks: number[], partSize: number) {
 describe("toParts", () => {
   test("re-chunks into equal parts with a short final part, preserving bytes", async () => {
     const parts = await collect([3, 10, 1, 7, 0, 4], 8);
-    expect(parts.map((p) => p.length)).toEqual([8, 8, 8, 1]);
+    assert.deepEqual(parts.map((p) => p.length), [8, 8, 8, 1]);
     const all = Buffer.concat(parts);
-    expect([...all]).toEqual(Array.from({ length: 25 }, (_, i) => i % 251));
+    assert.deepEqual([...all], Array.from({ length: 25 }, (_, i) => i % 251));
   });
 
   test("empty stream yields nothing", async () => {
-    expect(await collect([], 8)).toEqual([]);
+    assert.deepEqual(await collect([], 8), []);
   });
 });

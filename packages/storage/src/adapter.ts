@@ -35,6 +35,8 @@ export interface StorageAdapter {
   writeStream(path: string, stream: ReadableStream<Uint8Array>, options?: WriteStreamOptions): Promise<void>;
   readFile(path: string): Promise<Buffer>;
   readStream(path: string): ReadableStream<Uint8Array>;
+  /** Random-access zip reader (unzipper central directory) without copying the archive locally. */
+  openZip(path: string): ReturnType<typeof import("unzipper").Open.file>;
   listFiles(prefix: string): Promise<string[]>;
   deleteDir(path: string): Promise<void>;
   getSize(path: string): Promise<number>;

@@ -11,13 +11,9 @@ import { getStorage } from "@dxd/storage";
 import type { MultipartUploadProgress } from "@dxd/storage/adapter";
 import { db, sites, crawls, crawlLogs, settings, sitePublications, siteDomains } from "./db.js";
 import fs from "node:fs/promises";
-import nodeFs from "node:fs";
 import path from "node:path";
 import archiver from "archiver";
-import unzipper from "unzipper";
-import { once } from "node:events";
 import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
 import { captureMemorySnapshot, formatMemorySnapshot, type MemorySnapshot } from "./memory.js";
 
 const storage = getStorage();
@@ -195,70 +191,6 @@ async function walkLocalFiles(rootDir: string): Promise<string[]> {
   return files;
 }
 
-function createFileReadableStream(
-  filePath: string,
-  chunkSize = 8 * 1024 * 1024
-): ReadableStream<Uint8Array> {
-  let fileHandle: Awaited<ReturnType<typeof fs.open>> | null = null;
-  let position = 0;
-
-  const closeFileHandle = async (): Promise<void> => {
-    const handle = fileHandle;
-    fileHandle = null;
-    if (!handle) {
-      return;
-    }
-    try {
-      await handle.close();
-    } catch (error) {
-      if (!isBadFileDescriptorError(error)) {
-        throw error;
-      }
-    }
-  };
-
-  return new ReadableStream<Uint8Array>({
-    async start() {
-      fileHandle = await fs.open(filePath, "r");
-    },
-    async pull(controller) {
-      if (!fileHandle) {
-        controller.error(new Error(`Archive stream handle is not available for ${filePath}`));
-        return;
-      }
-
-      try {
-        const buffer = Buffer.allocUnsafe(chunkSize);
-        const { bytesRead } = await fileHandle.read(buffer, 0, chunkSize, position);
-
-        if (bytesRead <= 0) {
-          await closeFileHandle();
-          controller.close();
-          return;
-        }
-
-        position += bytesRead;
-        controller.enqueue(buffer.subarray(0, bytesRead));
-      } catch (error) {
-        await closeFileHandle().catch(() => undefined);
-        controller.error(error);
-      }
-    },
-    async cancel() {
-      await closeFileHandle();
-    },
-  });
-}
-
-function isBadFileDescriptorError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    "code" in error &&
-    typeof error.code === "string" &&
-    error.code === "EBADF"
-  );
-}
-
 function getArchiveStoragePath(outputPath: string): string {
   return outputPath.endsWith(".zip") ? outputPath : `${outputPath}.zip`;
 }
@@ -271,24 +203,15 @@ function toSafePublishedKey(prefix: string, zipEntryPath: string): string | null
   return `${prefix.replace(/\/+$/, "")}/${normalized}`;
 }
 
-async function downloadStorageObjectToFile(storagePath: string, localPath: string): Promise<void> {
-  await pipeline(
-    Readable.fromWeb(storage.readStream(storagePath) as any),
-    nodeFs.createWriteStream(localPath)
-  );
-}
-
-async function publishZipArchiveToR2(publicationId: string, archivePath: string, prefix: string) {
-  const tempDir = await storage.createTempDir(`publish-${publicationId}`);
-  const localZipPath = path.join(tempDir, "archive.zip");
+// Reads the zip from R2 with ranged GETs and streams each entry back to R2: nothing hits disk.
+async function publishZipArchiveToR2(archivePath: string, prefix: string) {
   let fileCount = 0;
   let totalBytes = 0;
 
-  try {
-    await downloadStorageObjectToFile(archivePath, localZipPath);
+  {
     await storage.deleteDir(prefix).catch(() => undefined);
 
-    const directory = await unzipper.Open.file(localZipPath);
+    const directory = await storage.openZip(archivePath);
     for (const entry of directory.files) {
       if (entry.type !== "File") continue;
 
@@ -303,8 +226,6 @@ async function publishZipArchiveToR2(publicationId: string, archivePath: string,
       fileCount += 1;
       totalBytes += entry.uncompressedSize;
     }
-  } finally {
-    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
   }
 
   if (fileCount === 0) {
@@ -314,12 +235,13 @@ async function publishZipArchiveToR2(publicationId: string, archivePath: string,
   return { fileCount, totalBytes };
 }
 
+// Zip is streamed straight into R2 as it is built (one multipart part in memory, no zip on disk).
 async function uploadArchiveFromTempDir(
   crawlId: string,
   outputDir: string,
   options?: {
     zlibLevel?: number;
-    onAfterArchive?: (archiveSize: number, sourceBytes: number) => Promise<void>;
+    onBeforeUpload?: (sourceBytes: number) => Promise<void>;
     onAfterUpload?: (outputSize: number) => Promise<void>;
     assertNotCancelled?: () => Promise<void>;
   }
@@ -341,12 +263,10 @@ async function uploadArchiveFromTempDir(
     throw new Error(`No files found to archive in ${outputDir}`);
   }
 
-  const localArchivePath = path.join(outputDir, "__archive__.zip");
-
   await options?.assertNotCancelled?.();
+  await options?.onBeforeUpload?.(sourceBytes);
 
-
-  // Save initial upload progress to database for list view
+  // Upload progress is tracked against source bytes; the zip size is unknown until it is done.
   await db
     .update(crawls)
     .set({
@@ -359,113 +279,72 @@ async function uploadArchiveFromTempDir(
     .where(eq(crawls.id, crawlId));
 
   const archive = archiver("zip", { zlib: { level: options?.zlibLevel ?? 1 } });
-  const archiveOutput = nodeFs.createWriteStream(localArchivePath);
-  archive.pipe(archiveOutput);
   archive.on("warning", (error: Error) => {
-    console.warn("[Worker] Archive warning", {
-      crawlId,
-      outputDir,
-      error: error.message,
-    });
-  });
-  archive.on("error", (error: Error) => {
-    console.error("[Worker] Archive error", {
-      crawlId,
-      outputDir,
-      error: error.message,
-    });
+    console.warn("[Worker] Archive warning", { crawlId, outputDir, error: error.message });
   });
 
+  let lastDbUpdate = 0;
+  const uploadOptions = {
+    partDelayMs: 50, // smooth out traffic between 16MB parts (TCP_OVERWINDOW)
+    onProgress: async (progress: MultipartUploadProgress) => {
+      await options?.assertNotCancelled?.();
+      const now = Date.now();
+      if (now - lastDbUpdate < 1000) return;
+      lastDbUpdate = now;
+      await db
+        .update(crawls)
+        .set({
+          uploadTotalBytes: Math.max(sourceBytes, progress.uploadedBytes),
+          uploadUploadedBytes: progress.uploadedBytes,
+          uploadCurrentFile: `archive.zip (part ${progress.partNumber})`,
+        })
+        .where(eq(crawls.id, crawlId));
+    },
+  };
+
+  const upload = storage.writeStream(
+    archivePath,
+    Readable.toWeb(archive) as unknown as ReadableStream<Uint8Array>,
+    uploadOptions
+  );
   try {
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i]!;
-      if (i % 50 === 0) {
-        await options?.assertNotCancelled?.();
-      }
-      const relativePath = path.relative(outputDir, file).replace(/\\/g, "/");
-      archive.file(file, { name: relativePath });
-    }
-
-    await options?.assertNotCancelled?.();
-    await archive.finalize();
-    await once(archiveOutput, "close");
-
-    const archiveSize = (await fs.stat(localArchivePath)).size;
-    await options?.assertNotCancelled?.();
-    await options?.onAfterArchive?.(archiveSize, sourceBytes);
-    
-    // Upload with progress tracking and throttling to prevent TCP_OVERWINDOW
-    // Add 50ms delay between 16MB parts to smooth out network traffic
-    const partDelayMs = 50;
-    let lastDbUpdate = 0;
-    const dbUpdateIntervalMs = 1000; // Update DB every second max
-    
-    const uploadOptions = {
-      totalSize: archiveSize,
-      partDelayMs,
-      onProgress: async (progress: MultipartUploadProgress) => {
-        await options?.assertNotCancelled?.();
-        const percent = progress.totalBytes > 0 
-          ? Math.round((progress.uploadedBytes / progress.totalBytes) * 100)
-          : 0;
-
-        
-        // Update DB throttled (max once per second)
-        const now = Date.now();
-        if (now - lastDbUpdate >= dbUpdateIntervalMs) {
-          lastDbUpdate = now;
-          await db
-            .update(crawls)
-            .set({
-              uploadTotalBytes: progress.totalBytes,
-              uploadUploadedBytes: progress.uploadedBytes,
-              uploadFilesTotal: 1,
-              uploadFilesUploaded: progress.partNumber > 0 ? 1 : 0,
-              uploadCurrentFile: `archive.zip (part ${progress.partNumber}/${progress.totalParts})`,
-            })
-            .where(eq(crawls.id, crawlId));
+    // Feed files in; archiver back-pressures on the upload stream. If the upload fails, stop feeding.
+    const feed = (async () => {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i]!;
+        if (i % 50 === 0) {
+          await options?.assertNotCancelled?.();
         }
-      },
-    };
-
-    await options?.assertNotCancelled?.();
-    if (storage.uploadFile) {
-      await storage.uploadFile(archivePath, localArchivePath, uploadOptions);
-    } else {
-      const archiveReadStream = createFileReadableStream(localArchivePath);
-      await storage.writeStream(archivePath, archiveReadStream, uploadOptions);
-    }
+        archive.file(file, { name: path.relative(outputDir, file).replace(/\\/g, "/") });
+      }
+      await archive.finalize();
+    })();
+    await Promise.all([upload.catch((error) => { archive.abort(); throw error; }), feed]);
 
     await options?.assertNotCancelled?.();
     const outputSize = await storage.getSize(archivePath);
-    await options?.assertNotCancelled?.();
     await options?.onAfterUpload?.(outputSize);
-    
-    // Final progress update (100%)
 
-    // Save final upload progress to database
     await db
       .update(crawls)
       .set({
-        uploadTotalBytes: sourceBytes,
-        uploadUploadedBytes: sourceBytes,
-        uploadFilesTotal: 1,
+        uploadTotalBytes: outputSize,
+        uploadUploadedBytes: outputSize,
         uploadFilesUploaded: 1,
         uploadCurrentFile: "archive.zip",
       })
       .where(eq(crawls.id, crawlId));
 
     await fs.rm(outputDir, { recursive: true, force: true }).catch(() => undefined);
-    archive.removeAllListeners();
-    archive.destroy();
     return { archivePath, outputSize };
   } catch (error) {
+    // abort() ends the stream, so a truncated upload may still complete; wait, then delete it.
+    archive.abort();
+    await upload.catch(() => undefined);
     await storage.deleteDir(archivePath).catch(() => undefined);
-    archive.removeAllListeners();
-    archive.destroy(error as Error);
     throw error;
   } finally {
-    await fs.rm(localArchivePath, { force: true }).catch(() => undefined);
+    archive.removeAllListeners();
   }
 }
 
@@ -601,7 +480,7 @@ export async function processPublicationJob(job: PublicationJobData): Promise<vo
         throw new Error(`Archive not found at ${archivePath}`);
       }
 
-      const result = await publishZipArchiveToR2(publicationId, archivePath, publication.r2Prefix);
+      const result = await publishZipArchiveToR2(archivePath, publication.r2Prefix);
       await db
         .update(sitePublications)
         .set({
@@ -684,9 +563,8 @@ async function processArchiveJob(job: ArchiveJobData) {
         uploadArchiveFromTempDir(crawlId, outputDir, {
           zlibLevel,
           assertNotCancelled: assertArchiveCancellable,
-          onAfterArchive: async (archiveSize, sourceBytes) => {
-            await assertArchiveCancellable();
-            await memoryLogger.snapshot("after archive", { archiveSizeBytes: archiveSize, sourceBytes });
+          onBeforeUpload: async (sourceBytes) => {
+            await memoryLogger.snapshot("before zip upload", { sourceBytes });
             await db
               .update(crawls)
               .set({ status: "uploading" })

@@ -1,21 +1,8 @@
 import { Container } from "@cloudflare/containers";
 import type { Env } from "./index.js";
 
-// Env passed through to the crawler process (services/worker).
-const PASSTHROUGH_ENV = [
-  "CRAWLER_OWNS_QUEUE",
-  "STORAGE_TYPE",
-  "R2_ENDPOINT",
-  "R2_ACCESS_KEY_ID",
-  "R2_SECRET_ACCESS_KEY",
-  "R2_BUCKET",
-  "R2_REGION",
-  "R2_FORCE_PATH_STYLE",
-  "CRAWL_MAX_DURATION_MS",
-  "MAX_SITE_CONCURRENCY",
-  "ARCHIVE_UPLOAD_TIMEOUT_MS",
-  "ARCHIVE_ZLIB_LEVEL",
-] as const;
+// Env passed through to the crawler process (services/worker): queue flag, storage and tuning knobs.
+const PASSTHROUGH = /^(CRAWLER_OWNS_QUEUE|STORAGE_TYPE|R2_|AWS_|CRAWL_|ARCHIVE_|ASSET_|MAX_SITE_CONCURRENCY)/;
 
 /**
  * Singleton crawler container. It has no HTTP server: it drains the Postgres queue and exits,
@@ -32,9 +19,8 @@ export class Crawler extends Container<Env> {
     }
 
     const envVars: Record<string, string> = { DATABASE_URL: this.env.CRAWLER_DATABASE_URL };
-    for (const key of PASSTHROUGH_ENV) {
-      const value = this.env[key];
-      if (value) envVars[key] = value;
+    for (const [key, value] of Object.entries(this.env)) {
+      if (PASSTHROUGH.test(key) && typeof value === "string") envVars[key] = value;
     }
     if (crawlId) envVars.CRAWL_ID = crawlId;
 

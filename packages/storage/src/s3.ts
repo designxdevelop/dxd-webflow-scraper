@@ -1,9 +1,7 @@
 import path from "node:path";
-import fs from "node:fs";
 import fsp from "node:fs/promises";
-import { randomUUID } from "node:crypto";
-import { once } from "node:events";
 import { Readable } from "node:stream";
+import unzipper from "unzipper";
 import {
   S3Client,
   GetObjectCommand,
@@ -75,19 +73,7 @@ export class S3Storage implements StorageAdapter {
   }
 
   async writeFile(filePath: string, content: Buffer | string): Promise<void> {
-    const uploadTempDir = path.join(this.tempRoot, ".stream-uploads");
-    await fsp.mkdir(uploadTempDir, { recursive: true });
-
-    const body =
-      typeof content === "string" ? new TextEncoder().encode(content) : new Uint8Array(content);
-
-    const tempFilePath = path.join(uploadTempDir, `${randomUUID()}.upload`);
-    try {
-      await fsp.writeFile(tempFilePath, body);
-      await this.putObjectWithFallback(filePath, tempFilePath, body.length);
-    } finally {
-      await fsp.unlink(tempFilePath).catch(() => undefined);
-    }
+    await this.putObjectFromBuffer(filePath, Buffer.from(content));
   }
 
   async uploadFile(filePath: string, localFilePath: string, options?: WriteStreamOptions): Promise<void> {
@@ -95,21 +81,30 @@ export class S3Storage implements StorageAdapter {
     await this.putObjectWithFallback(filePath, localFilePath, stat.size, options);
   }
 
+  /**
+   * Streams straight to the bucket: holds one multipart part in memory at a time, never
+   * touches local disk. Streams that fit in one part become a single PutObject.
+   */
   async writeStream(filePath: string, stream: ReadableStream<Uint8Array>, options?: WriteStreamOptions): Promise<void> {
-    const uploadTempDir = path.join(this.tempRoot, ".stream-uploads");
-    await fsp.mkdir(uploadTempDir, { recursive: true });
-
-    const tempFilePath = path.join(uploadTempDir, `${randomUUID()}.upload`);
-
-    try {
-      // Spool the Web stream to disk first so S3 upload has a deterministic content length.
-      await writeWebStreamToFile(stream, tempFilePath);
-      const stat = await fsp.stat(tempFilePath);
-
-      await this.putObjectWithFallback(filePath, tempFilePath, stat.size, options);
-    } finally {
-      await fsp.unlink(tempFilePath).catch(() => undefined);
+    const partSize = resolveMultipartPartSize(options?.totalSize ?? 0, this.multipartPartSizeBytes);
+    const parts = toParts(Readable.fromWeb(stream as any), partSize);
+    const first = await parts.next();
+    const second = first.done ? first : await parts.next();
+    if (second.done) {
+      await this.putObjectFromBuffer(filePath, first.done ? Buffer.alloc(0) : first.value);
+      return;
     }
+    const allParts = (async function* () {
+      yield first.value as Buffer;
+      yield second.value as Buffer;
+      yield* parts;
+    })();
+    await this.putObjectMultipart(filePath, allParts, options?.totalSize ?? 0, options);
+  }
+
+  /** Random-access zip reader over ranged GETs, so archives are never downloaded to disk. */
+  openZip(filePath: string) {
+    return unzipper.Open.s3_v3(this.client as any, { Bucket: this.config.bucket, Key: filePath });
   }
 
   async readFile(filePath: string): Promise<Buffer> {
@@ -300,26 +295,26 @@ export class S3Storage implements StorageAdapter {
   private async putObjectWithFallback(key: string, localFilePath: string, size: number, options?: MultipartUploadOptions): Promise<void> {
     try {
       if (size === 0) {
-        await this.putObjectFromBuffer(key, localFilePath);
+        await this.putObjectFromBuffer(key, await fsp.readFile(localFilePath));
         return;
       }
 
       // Use multipart for all non-empty files to keep uploads retryable per-part.
-      await this.putObjectMultipart(key, localFilePath, size, options);
+      const partSize = resolveMultipartPartSize(size, this.multipartPartSizeBytes);
+      await this.putObjectMultipart(key, readFileParts(localFilePath, size, partSize), size, options);
     } catch (error) {
       if (
         (isChecksumMismatchError(error) || isSignatureMismatchError(error) || isRetryableUploadError(error)) &&
         size <= this.bufferFallbackMaxBytes
       ) {
-        await this.putObjectFromBuffer(key, localFilePath);
+        await this.putObjectFromBuffer(key, await fsp.readFile(localFilePath));
         return;
       }
       throw error;
     }
   }
 
-  private async putObjectFromBuffer(key: string, localFilePath: string): Promise<void> {
-    const buffer = await fsp.readFile(localFilePath);
+  private async putObjectFromBuffer(key: string, buffer: Buffer): Promise<void> {
     await this.sendWithDiagnostics("PutObject", () =>
       this.client.send(
         new PutObjectCommand({
@@ -332,11 +327,15 @@ export class S3Storage implements StorageAdapter {
     );
   }
 
-  private async putObjectMultipart(key: string, localFilePath: string, size: number, options?: MultipartUploadOptions): Promise<void> {
-    const partSize = resolveMultipartPartSize(size, this.multipartPartSizeBytes);
-    const totalParts = Math.ceil(size / partSize);
+  /** size = 0 means unknown (streamed); it is only used for progress reporting. */
+  private async putObjectMultipart(
+    key: string,
+    parts: AsyncIterable<Buffer>,
+    size: number,
+    options?: MultipartUploadOptions
+  ): Promise<void> {
+    const totalParts = size > 0 ? Math.ceil(size / resolveMultipartPartSize(size, this.multipartPartSizeBytes)) : 0;
     let uploadId: string | undefined;
-    let fileHandle: fsp.FileHandle | undefined;
     const completedParts: Array<{ ETag: string; PartNumber: number }> = [];
     let uploadedBytes = 0;
 
@@ -364,17 +363,9 @@ export class S3Storage implements StorageAdapter {
         throw new Error(`CreateMultipartUpload did not return UploadId for ${key}`);
       }
 
-      fileHandle = await fsp.open(localFilePath, "r");
-      let offset = 0;
       let partNumber = 1;
 
-      while (offset < size) {
-        const bytesToRead = Math.min(partSize, size - offset);
-        const chunk = await readChunk(fileHandle, offset, bytesToRead);
-        if (chunk.length === 0) {
-          break;
-        }
-
+      for await (const chunk of parts) {
         const etag = await this.uploadMultipartPartWithRetry({
           key,
           uploadId,
@@ -387,28 +378,26 @@ export class S3Storage implements StorageAdapter {
           PartNumber: partNumber,
         });
         uploadedBytes += chunk.length;
-        offset += chunk.length;
 
         // Report progress after each part
         await options?.onProgress?.({
-          totalBytes: size,
+          totalBytes: Math.max(size, uploadedBytes),
           uploadedBytes,
           partNumber,
-          totalParts,
+          totalParts: Math.max(totalParts, partNumber),
           currentPartBytes: chunk.length,
         });
 
         partNumber += 1;
 
         // Add delay between parts to prevent TCP_OVERWINDOW
-        // Skip delay for the last part
-        if (offset < size && options?.partDelayMs && options.partDelayMs > 0) {
+        if (options?.partDelayMs && options.partDelayMs > 0) {
           await wait(options.partDelayMs);
         }
       }
 
-      if (offset !== size) {
-        throw new Error(`Multipart upload read ${offset} bytes but expected ${size} bytes for ${key}`);
+      if (size > 0 && uploadedBytes !== size) {
+        throw new Error(`Multipart upload read ${uploadedBytes} bytes but expected ${size} bytes for ${key}`);
       }
 
       await this.sendWithDiagnostics("CompleteMultipartUpload", () =>
@@ -436,8 +425,6 @@ export class S3Storage implements StorageAdapter {
         ).catch(() => undefined);
       }
       throw error;
-    } finally {
-      await fileHandle?.close().catch(() => undefined);
     }
   }
 
@@ -526,66 +513,45 @@ async function streamToBuffer(stream: Readable): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
-async function writeWebStreamToFile(
-  stream: ReadableStream<Uint8Array>,
-  destinationPath: string
-): Promise<number> {
-  const writable = fs.createWriteStream(destinationPath);
-  const reader = stream.getReader();
-  let writtenBytes = 0;
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-
-      if (!value || value.byteLength === 0) {
-        continue;
-      }
-
-      await writeChunkToFile(writable, value);
-      writtenBytes += value.byteLength;
-    }
-
-    await closeFileWriteStream(writable);
-    return writtenBytes;
-  } catch (error) {
-    writable.destroy(error as Error);
-    throw error;
-  } finally {
-    reader.releaseLock();
-  }
-}
-
-async function writeChunkToFile(writable: fs.WriteStream, chunk: Uint8Array): Promise<void> {
-  const canContinue = writable.write(chunk);
-  if (canContinue) {
-    return;
-  }
-  await once(writable, "drain");
-}
-
-async function closeFileWriteStream(writable: fs.WriteStream): Promise<void> {
-  if (writable.destroyed) {
-    return;
-  }
-
-  await new Promise<void>((resolve, reject) => {
-    writable.end((error?: Error | null) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
-    });
-  });
-}
 
 function resolveMultipartPartSize(totalBytes: number, preferredPartSize: number): number {
   const minRequiredPartSize = Math.ceil(totalBytes / MAX_MULTIPART_PARTS);
   return Math.max(MIN_MULTIPART_PART_SIZE_BYTES, preferredPartSize, minRequiredPartSize);
+}
+
+async function* readFileParts(localFilePath: string, size: number, partSize: number): AsyncGenerator<Buffer> {
+  const fileHandle = await fsp.open(localFilePath, "r");
+  try {
+    for (let offset = 0; offset < size; offset += partSize) {
+      const chunk = await readChunk(fileHandle, offset, Math.min(partSize, size - offset));
+      if (chunk.length === 0) break;
+      yield chunk;
+    }
+  } finally {
+    await fileHandle.close().catch(() => undefined);
+  }
+}
+
+/** Re-chunks a byte stream into fixed-size parts (R2 requires equal-sized non-final parts). */
+export async function* toParts(stream: AsyncIterable<Uint8Array>, partSize: number): AsyncGenerator<Buffer> {
+  let pending: Buffer[] = [];
+  let pendingBytes = 0;
+  for await (const data of stream) {
+    let buf = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+    while (pendingBytes + buf.length >= partSize) {
+      const take = partSize - pendingBytes;
+      pending.push(buf.subarray(0, take));
+      yield Buffer.concat(pending);
+      pending = [];
+      pendingBytes = 0;
+      buf = buf.subarray(take);
+    }
+    if (buf.length > 0) {
+      pending.push(buf);
+      pendingBytes += buf.length;
+    }
+  }
+  if (pendingBytes > 0) yield Buffer.concat(pending);
 }
 
 async function readChunk(

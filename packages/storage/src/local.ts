@@ -1,3 +1,4 @@
+import unzipper from "unzipper";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -74,6 +75,10 @@ export class LocalStorage implements StorageAdapter {
   async readFile(filePath: string): Promise<Buffer> {
     const fullPath = path.join(this.basePath, filePath);
     return fsp.readFile(fullPath);
+  }
+
+  openZip(filePath: string) {
+    return unzipper.Open.file(path.join(this.basePath, filePath));
   }
 
   readStream(filePath: string): ReadableStream<Uint8Array> {

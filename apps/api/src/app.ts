@@ -43,7 +43,6 @@ export function createApp(config: AppConfig) {
 
     const allowedPatterns = [
       /^http:\/\/localhost:\d+$/,
-      /^https:\/\/.*\.up\.railway\.app$/,
       /^https:\/\/.*\.designxdevelop\.com$/,
     ];
     return allowedPatterns.some((pattern) => pattern.test(origin));

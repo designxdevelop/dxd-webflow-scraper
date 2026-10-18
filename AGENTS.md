@@ -28,6 +28,7 @@
 - Postgres is the queue. API inserts `pending` rows and wakes the container via `QueueClient` (`apps/api/src/queue/client.ts`).
 - Worker owns crawl execution state machine (`services/worker/src/processor.ts`).
 - Live crawl view polls `GET /api/crawls/:id` (logs/progress persisted in the DB). No Redis.
+- Production: Cloudflare Workers + a scale-to-zero Container, R2, and PlanetScale Postgres (shared `dxd-apps` cluster, 25 direct connections total; Workers use Hyperdrive, the container a 2-connection pool). Details in `ARCHITECTURE_CURRENT.md`. Railway is gone.
 
 ## Crawl and upload lifecycle
 

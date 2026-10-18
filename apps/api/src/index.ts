@@ -19,7 +19,7 @@ export type Env = {
   CORS_ALLOWED_ORIGINS?: string;
   NODE_ENV?: string;
   AUTH_COOKIE_DOMAIN?: string;
-  /** "true" once the Railway worker is stopped: enables cron scheduling and full queue draining. */
+  /** "true": the crawler container owns the queue; enables cron scheduling and full queue draining. */
   CRAWLER_OWNS_QUEUE?: string;
   /** Bearer token for POST /internal/crawler/kick (smoke tests). Unset = endpoint disabled. */
   CRAWLER_TRIGGER_SECRET?: string;

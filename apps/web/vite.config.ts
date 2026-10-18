@@ -8,9 +8,6 @@ const previewAllowedHosts = [
   "localhost",
   "127.0.0.1",
   ".designxdevelop.com",
-  ".up.railway.app",
-  process.env.RAILWAY_PUBLIC_DOMAIN,
-  process.env.RAILWAY_SERVICE_WEB_URL,
   (() => {
     const frontendUrl = process.env.FRONTEND_URL;
     if (!frontendUrl) return undefined;

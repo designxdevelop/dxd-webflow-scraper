@@ -5,7 +5,7 @@ A generalized Webflow site archiver with a UI dashboard. Crawls any Webflow site
 ## Features
 
 - **Multi-site support**: Manage multiple Webflow sites
-- **Real-time progress**: Watch crawls happen in real-time with SSE
+- **Live progress**: Watch crawl progress and logs update live in the dashboard
 - **Scheduled crawls**: Set up cron-based schedules for automatic archiving
 - **Asset localization**: Downloads and rewrites all JS, CSS, images, fonts
 - **Webflow-specific**: Removes badges, normalizes lazy-loaded media
@@ -16,12 +16,15 @@ A generalized Webflow site archiver with a UI dashboard. Crawls any Webflow site
 ```
 dxd-webflow-scraper/
 ├── apps/
-│   ├── web/          # Vite + TanStack Router dashboard
-│   └── api/          # Hono API server
+│   ├── web/             # Vite + TanStack Router dashboard (Cloudflare Worker static assets)
+│   ├── api/             # Hono API on Cloudflare Workers; cron + crawler container
+│   └── hosting-worker/  # Serves published backups on client hostnames
 ├── packages/
-│   └── scraper/      # Core scraping logic
+│   ├── scraper/         # Core scraping logic
+│   ├── storage/         # Local/S3/R2 storage adapters
+│   └── db/              # Drizzle schema + DB client
 ├── services/
-│   └── worker/       # Background job processor
+│   └── worker/          # Crawler process, runs in a Cloudflare Container
 ```
 
 - Current architecture reference: `ARCHITECTURE_CURRENT.md`
@@ -30,8 +33,9 @@ dxd-webflow-scraper/
 ## Tech Stack
 
 - **Frontend**: Vite, React, TanStack Router, TanStack Query, Tailwind CSS
-- **Backend**: Hono, Drizzle ORM, PostgreSQL
-- **Worker**: BullMQ, Redis, Playwright
+- **Backend**: Hono on Cloudflare Workers, Drizzle ORM, PostgreSQL (PlanetScale via Hyperdrive)
+- **Crawler**: Playwright in a Cloudflare Container; Postgres rows are the job queue (no Redis)
+- **Storage**: Cloudflare R2
 - **Scraper**: Playwright, Cheerio
 
 ## Getting Started
@@ -39,7 +43,7 @@ dxd-webflow-scraper/
 ### Prerequisites
 
 - [Bun](https://bun.sh/) >= 1.3.6
-- Docker (for PostgreSQL and Redis)
+- Docker (for local PostgreSQL)
 - Playwright browsers
 
 ### Setup
@@ -50,7 +54,7 @@ dxd-webflow-scraper/
 bun install
 ```
 
-2. Start PostgreSQL and Redis:
+2. Start local PostgreSQL:
 
 ```bash
 docker-compose up -d
@@ -100,8 +104,8 @@ cd apps/api && bun run dev
 # Terminal 2: Web dashboard
 cd apps/web && bun run dev
 
-# Terminal 3: Background worker
-cd services/worker && bun run dev
+# Terminal 3: Crawler (drains pending crawls, then exits)
+cd services/worker && CRAWLER_OWNS_QUEUE=true bun run start
 ```
 
 Or use Turbo:
@@ -109,6 +113,8 @@ Or use Turbo:
 ```bash
 bun run dev
 ```
+
+The API runs under `wrangler dev`; point its Hyperdrive binding at local Postgres with `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE=postgresql://dxd:dxd@localhost:5432/scraper`.
 
 Open http://localhost:5173 for the dashboard.
 
@@ -142,26 +148,20 @@ Open http://localhost:5173 for the dashboard.
 | `POST /api/sites/:id/crawl`    | Start a crawl            |
 | `GET /api/crawls`              | List crawls              |
 | `GET /api/crawls/:id`          | Get crawl details        |
-| `GET /api/sse/crawls/:id`      | SSE stream for live logs |
+| `GET /api/crawls/:id/logs`     | Crawl logs               |
 | `GET /api/crawls/:id/download` | Download archive as zip  |
 | `GET /preview/:crawlId/*`      | Preview archived files   |
 
 ## Deployment
 
-### Railway
+Production runs on Cloudflare (account "Design X Develop") with a PlanetScale Postgres database:
 
-1. Create a new project with PostgreSQL and Redis
-2. Deploy the API and worker as separate services
-3. Set environment variables
+- Web (`zip.designxdevelop.com`) and API (`zip-api.designxdevelop.com`) are Workers (`dxd-archiver-web`, `dxd-archiver-api`) on Worker routes.
+- Crawls run in a Cloudflare Container started on demand and by the API's cron tick; it scales to zero.
+- Archives and hosted backups are in R2 (`dxd-site-scraper`); `dxd-backup-hosting` serves hosted backups.
+- Database: PlanetScale `dxd-apps` cluster, database `archiver`, reached through Hyperdrive.
 
-### Docker
-
-Build and run with Docker:
-
-```bash
-docker build -t dxd-scraper .
-docker run -e DATABASE_URL=... -e REDIS_URL=... dxd-scraper
-```
+Deploy with `bun run deploy` in `apps/api` and `apps/web`. See `SETUP-INFRASTRUCTURE.md` for details and `ARCHITECTURE_CURRENT.md` for the current topology. Railway is no longer used.
 
 ## License
 

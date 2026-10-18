@@ -2,6 +2,9 @@
 
 > Note: this file contains historical planning notes from an earlier architecture phase.
 > For the active implementation, use `ARCHITECTURE_CURRENT.md`.
+> The Next.js, BullMQ/Redis and Railway pieces described here are not used. Production runs on
+> Cloudflare Workers + a Cloudflare Container with R2 and PlanetScale Postgres; the Railway
+> project was deleted on 2026-10-18.
 
 ## Executive Summary
 
@@ -1047,13 +1050,15 @@ export async function POST(
 | **HTML Parsing** | Cheerio | Fast, jQuery-like HTML manipulation |
 | **Archive** | Archiver | Streaming zip creation |
 | **Scheduling** | node-cron | Simple cron expressions |
-| **Deployment** | Railway/Docker | Easy container deployment |
+| **Deployment** | Railway/Docker (historical; now Cloudflare, see `ARCHITECTURE_CURRENT.md`) | Easy container deployment |
 
 ---
 
 ## 10. Deployment Architecture
 
-### Railway Deployment
+### Railway Deployment (historical, no longer used)
+
+> Superseded by the Cloudflare migration (2026-10-18). See `SETUP-INFRASTRUCTURE.md` for the current deployment.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐

@@ -1,3 +1,5 @@
+> **Partly superseded** by the Cloudflare migration (2026-10-18): BullMQ lock/stale-recovery parts no longer apply (Postgres is the queue; the crawler fails orphaned crawls on startup). The filename-length fix still applies.
+
 # Crawl Filename And Stale Recovery Design
 
 ## Summary

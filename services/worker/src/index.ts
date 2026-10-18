@@ -7,7 +7,7 @@ import { processCrawlJob, processPublicationJob } from "./processor.js";
 //
 // CRAWL_ID: process just this crawl (used for "Run now").
 // CRAWLER_OWNS_QUEUE=true: also drain every pending crawl/publication and fail crawls
-//   orphaned by a previous container. Keep false while the Railway worker is still running.
+//   orphaned by a previous container. Only one process may own the queue (max_instances 1).
 
 const ownsQueue = process.env.CRAWLER_OWNS_QUEUE === "true";
 const requestedCrawlId = process.env.CRAWL_ID || null;

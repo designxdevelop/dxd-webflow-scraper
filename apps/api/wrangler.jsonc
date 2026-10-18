@@ -6,13 +6,16 @@
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+  // Run next to PlanetScale (us-east) instead of next to the visitor: requests make several DB round trips.
+  "placement": { "mode": "smart" },
 
-  // Rollback: remove the route (traffic falls back to the Railway origin behind the proxied DNS record).
+  // No fallback origin behind the proxied DNS record: roll back with `wrangler rollback`, not by removing the route.
   "routes": [{ "pattern": "zip-api.designxdevelop.com/*", "zone_name": "designxdevelop.com" }],
 
   // Every minute: schedules + wake the crawler. No-op until CRAWLER_OWNS_QUEUE = "true".
   "triggers": { "crons": ["* * * * *"] },
 
+  // dxd-site-archiver-db -> PlanetScale dxd-apps / archiver via PgBouncer (port 6432), origin connection limit 5.
   "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "c0bd95a95ffc438aa3ebb25f8766b6a5" }],
   "r2_buckets": [{ "binding": "STORAGE_BUCKET", "bucket_name": "dxd-site-scraper" }],
 
@@ -41,7 +44,7 @@
     "HOSTING_CNAME_TARGET": "backup-hosting.designxdevelop.com",
     "CRAWLER_OWNS_QUEUE": "true",
 
-    // Crawler container (copied from the Railway worker)
+    // Crawler container settings (passed through to services/worker, see src/crawler.ts)
     "STORAGE_TYPE": "s3",
     "R2_BUCKET": "dxd-site-scraper",
     "R2_REGION": "auto",
@@ -59,7 +62,7 @@
     "MAX_SITE_CONCURRENCY": "3"
   }
   // Secrets (wrangler secret put): AUTH_SECRET, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET,
-  // CLOUDFLARE_ZONE_ID, CLOUDFLARE_API_TOKEN, CRAWLER_DATABASE_URL (direct Postgres URL; update it
-  // together with the Hyperdrive origin when the DB moves), R2_ENDPOINT, R2_ACCESS_KEY_ID,
+  // CLOUDFLARE_ZONE_ID, CLOUDFLARE_API_TOKEN, CRAWLER_DATABASE_URL (direct PlanetScale URL, 2-connection
+  // pool; update it together with the Hyperdrive origin when the DB moves), R2_ENDPOINT, R2_ACCESS_KEY_ID,
   // R2_SECRET_ACCESS_KEY, CRAWLER_TRIGGER_SECRET.
 }

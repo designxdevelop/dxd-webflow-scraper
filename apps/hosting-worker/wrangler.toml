@@ -11,6 +11,7 @@ invocation_logs = true
 binding = "STORAGE_BUCKET"
 bucket_name = "dxd-site-scraper"
 
+# dxd-site-archiver-db -> PlanetScale dxd-apps / archiver via PgBouncer (port 6432), shared with the API Worker.
 [[hyperdrive]]
 binding = "HYPERDRIVE"
 id = "c0bd95a95ffc438aa3ebb25f8766b6a5"
@@ -19,4 +20,4 @@ id = "c0bd95a95ffc438aa3ebb25f8766b6a5"
 NODE_ENV = "production"
 
 # Configure a Cloudflare for SaaS fallback origin/custom hostname target in Cloudflare,
-# then set HOSTING_CNAME_TARGET to that hostname in the API/Railway service.
+# then set HOSTING_CNAME_TARGET to that hostname in the API Worker vars (apps/api/wrangler.jsonc).

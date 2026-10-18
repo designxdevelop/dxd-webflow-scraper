@@ -38,7 +38,7 @@ When the backup is needed, disable redirect mode for that client domain and the 
 You need these Cloudflare pieces:
 
 - R2 bucket used by the scraper archives and hosted backup files.
-- Hyperdrive config pointing to Railway Postgres.
+- Hyperdrive config `dxd-site-archiver-db` pointing to the PlanetScale `archiver` database.
 - Dedicated Cloudflare Worker from `apps/hosting-worker`.
 - Cloudflare for SaaS / Custom Hostnames configured for client-owned CNAME hostnames.
 - Cloudflare API token that can manage custom hostnames in the `designxdevelop.com` zone.
@@ -93,23 +93,15 @@ If your bucket has a different name, replace `dxd-site-scraper` with the real bu
 
 The hosting Worker needs Postgres access to map incoming hostnames to the active published backup.
 
-Create a Hyperdrive config pointing to Railway Postgres:
-
-```bash
-cd apps/hosting-worker
-bunx wrangler hyperdrive create dxd-postgres \
-  --connection-string="postgres://USER:PASSWORD@HOST:PORT/DATABASE"
-```
-
-Then update `apps/hosting-worker/wrangler.toml`:
+It uses the existing Hyperdrive config `dxd-site-archiver-db`, which points at PlanetScale's PgBouncer (port 6432, origin connection limit 5) for the `archiver` database on the `dxd-apps` cluster. `apps/hosting-worker/wrangler.toml` already has:
 
 ```toml
 [[hyperdrive]]
 binding = "HYPERDRIVE"
-id = "YOUR_HYPERDRIVE_CONFIG_ID"
+id = "c0bd95a95ffc438aa3ebb25f8766b6a5"
 ```
 
-The API on Railway connects directly to Postgres; only the hosting Worker needs Hyperdrive.
+The API Worker uses the same Hyperdrive config. The crawler container can't use Hyperdrive and connects with its own `CRAWLER_DATABASE_URL` secret. See `SETUP-INFRASTRUCTURE.md` to recreate the config.
 
 ## Deploy The Hosting Worker
 
@@ -165,36 +157,25 @@ Create a Cloudflare API token scoped to the `designxdevelop.com` zone.
 
 It needs permission to manage custom hostnames for that zone.
 
-Set these variables in Railway:
+Set these as secrets on the API Worker (`cd apps/api && bunx wrangler secret put <NAME>`):
 
 ```txt
 CLOUDFLARE_ZONE_ID=<designxdevelop.com zone id>
 CLOUDFLARE_API_TOKEN=<custom-hostname management token>
 ```
 
-## Railway Environment Variables
+## API Worker Configuration
 
-Set these on the Railway app/API service that powers `https://zip.designxdevelop.com`:
+The `dxd-archiver-api` Worker (`zip-api.designxdevelop.com`, behind the dashboard at `https://zip.designxdevelop.com`) already sets these in `apps/api/wrangler.jsonc` `vars`:
 
 ```txt
 FRONTEND_URL=https://zip.designxdevelop.com
 HOSTING_CNAME_TARGET=backup-hosting.designxdevelop.com
-CLOUDFLARE_ZONE_ID=<designxdevelop.com zone id>
-CLOUDFLARE_API_TOKEN=<custom-hostname management token>
 ```
 
-Keep the existing database, queue, auth, and storage values.
+`CLOUDFLARE_ZONE_ID` and `CLOUDFLARE_API_TOKEN` are secrets (above). The database is reached through the `HYPERDRIVE` binding; the crawler container uses the `CRAWLER_DATABASE_URL` secret. There is no Redis or separate worker service.
 
-Typical required values:
-
-```txt
-DATABASE_URL=<Railway Postgres URL>
-REDIS_URL=<Redis URL>
-WORKER_SERVICE_URL=<Railway worker HTTP URL>
-WORKER_API_SECRET=<shared secret>
-```
-
-For R2 storage, use whichever env family your app already uses successfully.
+The crawler container writes to R2 through the S3 API. Its storage settings are API Worker vars (`STORAGE_TYPE`, `R2_BUCKET`, `R2_REGION`, `R2_FORCE_PATH_STYLE`) and secrets (`R2_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`), passed into the container. The storage package accepts either env family.
 
 R2-style example:
 
@@ -220,11 +201,11 @@ S3_REGION=auto
 S3_FORCE_PATH_STYLE=true
 ```
 
-The Railway worker must use the same R2 bucket as the hosting Worker.
+The crawler container must use the same R2 bucket as the hosting Worker.
 
 ## Run Database Migrations
 
-After merging and deploying the code, run:
+After merging and deploying the code, run this with `DATABASE_URL` set to the PlanetScale `archiver` URL from the 1Password vault "DXD Production":
 
 ```bash
 bun run db:migrate

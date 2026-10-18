@@ -5,6 +5,6 @@
   "compatibility_date": "2026-10-01",
   // Static SPA: build with VITE_API_URL=https://zip-api.designxdevelop.com (see `bun run deploy`).
   "assets": { "directory": "./dist", "not_found_handling": "single-page-application" },
-  // Rollback: remove the route (traffic falls back to the Railway origin behind the proxied DNS record).
+  // No fallback origin behind the proxied DNS record: roll back with `wrangler rollback`, not by removing the route.
   "routes": [{ "pattern": "zip.designxdevelop.com/*", "zone_name": "designxdevelop.com" }]
 }

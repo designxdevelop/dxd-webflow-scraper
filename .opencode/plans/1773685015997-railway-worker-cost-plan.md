@@ -1,3 +1,5 @@
+> **Superseded** by the Cloudflare migration (2026-10-18): Railway, Redis and BullMQ are gone; see `ARCHITECTURE_CURRENT.md`.
+
 # Railway Worker Cost + Memory Optimization Plan
 
 ## Goal

@@ -7,8 +7,8 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
 
-  // Cutover: add { "pattern": "zip-api.designxdevelop.com", "custom_domain": false, "zone_name": "designxdevelop.com" }
-  "routes": [],
+  // Rollback: remove the route (traffic falls back to the Railway origin behind the proxied DNS record).
+  "routes": [{ "pattern": "zip-api.designxdevelop.com/*", "zone_name": "designxdevelop.com" }],
 
   // Every minute: schedules + wake the crawler. No-op until CRAWLER_OWNS_QUEUE = "true".
   "triggers": { "crons": ["* * * * *"] },
@@ -39,7 +39,7 @@
     "CORS_ALLOWED_ORIGINS": "https://zip.designxdevelop.com",
     "AUTH_COOKIE_DOMAIN": ".designxdevelop.com",
     "HOSTING_CNAME_TARGET": "backup-hosting.designxdevelop.com",
-    "CRAWLER_OWNS_QUEUE": "false",
+    "CRAWLER_OWNS_QUEUE": "true",
 
     // Crawler container (copied from the Railway worker)
     "STORAGE_TYPE": "s3",

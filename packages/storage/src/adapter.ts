@@ -32,7 +32,8 @@ export interface WriteStreamOptions extends MultipartUploadOptions {
 export interface StorageAdapter {
   writeFile(path: string, content: Buffer | string): Promise<void>;
   uploadFile?(path: string, localFilePath: string, options?: WriteStreamOptions): Promise<void>;
-  writeStream(path: string, stream: ReadableStream<Uint8Array>, options?: WriteStreamOptions): Promise<void>;
+  // Pass node Readables as-is: Bun's Readable.toWeb() drops bytes on Linux.
+  writeStream(path: string, stream: AsyncIterable<Uint8Array>, options?: WriteStreamOptions): Promise<void>;
   readFile(path: string): Promise<Buffer>;
   readStream(path: string): ReadableStream<Uint8Array>;
   /** Random-access zip reader (unzipper central directory) without copying the archive locally. */

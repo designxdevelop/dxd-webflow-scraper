@@ -85,9 +85,9 @@ export class S3Storage implements StorageAdapter {
    * Streams straight to the bucket: holds one multipart part in memory at a time, never
    * touches local disk. Streams that fit in one part become a single PutObject.
    */
-  async writeStream(filePath: string, stream: ReadableStream<Uint8Array>, options?: WriteStreamOptions): Promise<void> {
+  async writeStream(filePath: string, stream: AsyncIterable<Uint8Array>, options?: WriteStreamOptions): Promise<void> {
     const partSize = resolveMultipartPartSize(options?.totalSize ?? 0, this.multipartPartSizeBytes);
-    const parts = toParts(Readable.fromWeb(stream as any), partSize);
+    const parts = toParts(stream, partSize);
     const first = await parts.next();
     const second = first.done ? first : await parts.next();
     if (second.done) {

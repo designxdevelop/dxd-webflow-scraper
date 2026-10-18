@@ -13,7 +13,6 @@ import { db, sites, crawls, crawlLogs, settings, sitePublications, siteDomains }
 import fs from "node:fs/promises";
 import path from "node:path";
 import archiver from "archiver";
-import { Readable } from "node:stream";
 import { captureMemorySnapshot, formatMemorySnapshot, type MemorySnapshot } from "./memory.js";
 
 const storage = getStorage();
@@ -220,7 +219,7 @@ async function publishZipArchiveToR2(archivePath: string, prefix: string) {
 
       await storage.writeStream(
         key,
-        Readable.toWeb(entry.stream()) as unknown as ReadableStream<Uint8Array>,
+        entry.stream(),
         { totalSize: entry.uncompressedSize }
       );
       fileCount += 1;
@@ -304,7 +303,7 @@ async function uploadArchiveFromTempDir(
 
   const upload = storage.writeStream(
     archivePath,
-    Readable.toWeb(archive) as unknown as ReadableStream<Uint8Array>,
+    archive,
     uploadOptions
   );
   try {

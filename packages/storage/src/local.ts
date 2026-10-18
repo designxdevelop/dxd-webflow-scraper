@@ -15,7 +15,7 @@ export class LocalStorage implements StorageAdapter {
     await fsp.writeFile(fullPath, content);
   }
 
-  async writeStream(filePath: string, stream: ReadableStream<Uint8Array>, options?: WriteStreamOptions): Promise<void> {
+  async writeStream(filePath: string, stream: AsyncIterable<Uint8Array>, options?: WriteStreamOptions): Promise<void> {
     const fullPath = path.join(this.basePath, filePath);
     await fsp.mkdir(path.dirname(fullPath), { recursive: true });
 
@@ -180,21 +180,15 @@ export class LocalStorage implements StorageAdapter {
 }
 
 async function writeWebStreamToFile(
-  stream: ReadableStream<Uint8Array>,
+  stream: AsyncIterable<Uint8Array>,
   destinationPath: string,
   onChunk?: (writtenBytes: number, chunkBytes: number) => void | Promise<void>
 ): Promise<number> {
   const writable = fs.createWriteStream(destinationPath);
-  const reader = stream.getReader();
   let writtenBytes = 0;
 
   try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-
+    for await (const value of stream) {
       if (!value || value.byteLength === 0) {
         continue;
       }
@@ -209,8 +203,6 @@ async function writeWebStreamToFile(
   } catch (error) {
     writable.destroy(error as Error);
     throw error;
-  } finally {
-    reader.releaseLock();
   }
 }
 

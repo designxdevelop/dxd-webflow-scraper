@@ -1,0 +1,65 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "dxd-archiver-api",
+  "main": "src/index.ts",
+  "account_id": "443d20e37c03fd9af4ee799444a4569e",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  // Rollback: remove the route (traffic falls back to the Railway origin behind the proxied DNS record).
+  "routes": [{ "pattern": "zip-api.designxdevelop.com/*", "zone_name": "designxdevelop.com" }],
+
+  // Every minute: schedules + wake the crawler. No-op until CRAWLER_OWNS_QUEUE = "true".
+  "triggers": { "crons": ["* * * * *"] },
+
+  "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "c0bd95a95ffc438aa3ebb25f8766b6a5" }],
+  "r2_buckets": [{ "binding": "STORAGE_BUCKET", "bucket_name": "dxd-site-scraper" }],
+
+  "containers": [
+    {
+      "class_name": "Crawler",
+      "image": "../../services/worker/Dockerfile",
+      "image_build_context": "../..",
+      // 1/2 vCPU, 4 GiB, 8 GB disk. Largest site (Onramp) needs ~1.5 GB image + ~1.7 GB crawl
+      // scratch; the zip streams to R2. If Onramp starts timing out, try {vcpu:1, memory_mib:4096, disk_mb:8000}.
+      "instance_type": "standard-1",
+      "max_instances": 1,
+      // Don't replace a running crawl on deploy for its first hour.
+      "rollout_active_grace_period": 3600
+    }
+  ],
+  "durable_objects": { "bindings": [{ "name": "CRAWLER", "class_name": "Crawler" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Crawler"] }],
+
+  "vars": {
+    "NODE_ENV": "production",
+    "FRONTEND_URL": "https://zip.designxdevelop.com",
+    "AUTH_URL": "https://zip-api.designxdevelop.com",
+    "CORS_ALLOWED_ORIGINS": "https://zip.designxdevelop.com",
+    "AUTH_COOKIE_DOMAIN": ".designxdevelop.com",
+    "HOSTING_CNAME_TARGET": "backup-hosting.designxdevelop.com",
+    "CRAWLER_OWNS_QUEUE": "true",
+
+    // Crawler container (copied from the Railway worker)
+    "STORAGE_TYPE": "s3",
+    "R2_BUCKET": "dxd-site-scraper",
+    "R2_REGION": "auto",
+    "R2_FORCE_PATH_STYLE": "true",
+    "AWS_REQUEST_CHECKSUM_CALCULATION": "WHEN_SUPPORTED",
+    "AWS_RESPONSE_CHECKSUM_VALIDATION": "WHEN_SUPPORTED",
+    "ARCHIVE_ZLIB_LEVEL": "1",
+    "ASSET_CACHE_ENABLED": "true",
+    "CRAWL_ASSET_CONCURRENCY": "6",
+    "CRAWL_PAGE_ASSET_CONCURRENCY": "6",
+    "CRAWL_MAX_BINARY_ASSET_BYTES": "26214400",
+    "CRAWL_MAX_MEDIA_ASSET_BYTES": "157286400",
+    "CRAWL_MEMORY_LOG_EVERY_PAGES": "25",
+    "CRAWL_RSS_SAFETY_THRESHOLD_PERCENT": "0.85",
+    "MAX_SITE_CONCURRENCY": "3"
+  }
+  // Secrets (wrangler secret put): AUTH_SECRET, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET,
+  // CLOUDFLARE_ZONE_ID, CLOUDFLARE_API_TOKEN, CRAWLER_DATABASE_URL (direct Postgres URL; update it
+  // together with the Hyperdrive origin when the DB moves), R2_ENDPOINT, R2_ACCESS_KEY_ID,
+  // R2_SECRET_ACCESS_KEY, CRAWLER_TRIGGER_SECRET.
+}

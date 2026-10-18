@@ -149,7 +149,9 @@ if (!connectionString) {
   throw new Error("DATABASE_URL environment variable is required");
 }
 
-const client = postgres(connectionString);
+// Sequential worker on a shared cluster (25 direct connections total): keep the pool tiny, and skip
+// named prepared statements so it also works behind PgBouncer transaction pooling.
+const client = postgres(connectionString, { max: 2, prepare: false });
 export const db = drizzle(client, {
   schema: {
     sites,

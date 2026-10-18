@@ -199,8 +199,7 @@ app.post("/:id/crawl", async (c) => {
     })
     .returning();
 
-  // Queue the job via abstracted client (BullMQ on Node, HTTP on Workers).
-  // If enqueue fails, do not leave the crawl stuck as pending with no queue job.
+  // Wake the crawler container. If that fails, do not leave the crawl stuck as pending with no queue job.
   try {
     await queue.addCrawlJob(siteId, crawl.id);
   } catch (error) {

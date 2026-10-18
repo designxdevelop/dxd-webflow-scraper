@@ -1,4 +1,5 @@
-import cronParser from "cron-parser";
+// Named export: the default export has no .parse() once bundled for Workers.
+import { CronExpressionParser } from "cron-parser";
 
 export function isValidDownloadBlacklistRule(value: string): boolean {
   if (!value || !value.trim()) {
@@ -51,9 +52,9 @@ export function getNextScheduledAt(scheduleEnabled: boolean, scheduleCron?: stri
   }
 
   try {
-    const interval = cronParser.parse(scheduleCron);
-    return interval.next().toDate();
-  } catch {
+    return CronExpressionParser.parse(scheduleCron).next().toDate();
+  } catch (error) {
+    console.error(`[schedule] Invalid cron "${scheduleCron}"`, error);
     return null;
   }
 }

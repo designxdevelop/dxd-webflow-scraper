@@ -24,7 +24,7 @@
     "db:push": "turbo db:push --filter=@dxd/api"
   },
   "devDependencies": {
-    "turbo": "^2.11.7",
+    "turbo": "^2.11.10",
     "typescript": "^5.9.3"
   },
   "overrides": {
